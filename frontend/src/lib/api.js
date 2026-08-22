@@ -23,6 +23,8 @@ export const api = {
   runs:        ()             => req('/api/runs'),
   score:       (runId)        => req(`/api/runs/${runId}/score`, { method: 'POST' }),
   world:       ()             => req('/api/world'),
+  kpis:        ()             => req('/api/kpis'),
+  network:     ()             => req('/api/network'),
   incidents:   ()             => req('/api/incidents'),
   audit:       (after = 0)    => req(`/api/audit?after=${after}&limit=300`),
   solve:       (poId, record) => req(`/api/solve/${poId}?record=${record ? 'true' : 'false'}`),

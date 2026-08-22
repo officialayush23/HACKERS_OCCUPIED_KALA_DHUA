@@ -163,3 +163,19 @@ insert into messages (direction, supplier_id, subject, body) values
 --   from production_orders po
 --   join inventory i on i.component_id = po.required_component
 --  where po.id = 'PROD-882';
+
+-- ---------- geography (drives the network view) -----------------------------
+update warehouses set lat=18.7605, lng=73.8636 where id='Pune-Plant-1';
+update warehouses set lat=18.7833, lng=74.2500 where id='Pune-WH-2';
+update suppliers set lat=22.5431, lng=114.0579 where id='SUP-21';
+update suppliers set lat=13.0827, lng=80.2707  where id='SUP-42';
+update suppliers set lat=22.5431, lng=114.0579 where id='SUP-18';
+update suppliers set lat=18.5204, lng=73.8567  where id='SUP-33';
+update suppliers set lat=25.0330, lng=121.5654 where id='SUP-57';
+update suppliers set lat=13.0827, lng=80.2707  where id='SUP-64';
+update suppliers set lat= 1.3521, lng=103.8198 where id='SUP-71';
+update suppliers set lat=19.0760, lng=72.8777  where id='SUP-88';
+update suppliers set lat= 5.4141, lng=100.3288 where id='SUP-95';
+update suppliers set lat=22.5431, lng=114.0579 where id='SUP-29';
+update suppliers set lat=18.5089, lng=73.8553  where id='SUP-77';
+update suppliers set lat=13.0827, lng=80.2707  where id='SUP-103';

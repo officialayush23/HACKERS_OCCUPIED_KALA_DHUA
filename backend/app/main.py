@@ -15,7 +15,8 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from .core import CLOCK, HUB, close_db, db, emit, set_run_context
+from .core import (APPROVAL_THRESHOLD_INR, CLOCK, HUB, close_db, db, emit,
+                    set_run_context)
 from . import injector
 from .scenarios import EVENT_TYPES, SCENARIOS, list_scenarios
 from .solver import solve_for_production_order
@@ -294,6 +295,90 @@ async def solve_endpoint(production_order_id: str, record: bool = False):
                                payload={"estimated_cost": chosen["total_cost"],
                                         "threshold": result["approval_threshold"]})
     return result
+
+
+@app.get("/api/kpis")
+async def kpis():
+    """Headline numbers for the overview strip."""
+    pool = await db()
+    async with pool.acquire() as conn:
+        open_incidents = await conn.fetchval(
+            "select count(*) from incidents where status not in ('resolved','failed')")
+        critical = await conn.fetchval(
+            "select count(*) from incidents where severity in ('high','critical') "
+            "and status not in ('resolved','failed')")
+        min_cover = await conn.fetchval(
+            "select min(usable_stock::numeric / nullif(daily_usage,0)) from inventory")
+        erp_gap = await conn.fetchval(
+            "select coalesce(sum(erp_stock - usable_stock),0) from inventory")
+        delayed = await conn.fetchval(
+            "select count(*) from purchase_orders where status='delayed'")
+        contradictions = await conn.fetchval(
+            "select coalesce(sum(contradictions_detected),0) from supplier_memory")
+        spend = await conn.fetchval(
+            "select coalesce(sum(total_value),0) from purchase_orders where created_by_agent")
+        rejects = await conn.fetch(
+            "select technical_payload->>'constraint' as c, count(*) as n from audit_events "
+            "where event_type='OPTION_REJECTED' group by 1")
+        trust = await conn.fetchrow(
+            "select round(avg(effective_reliability),3) as avg_trust, "
+            "min(effective_reliability) as worst from supplier_effective")
+        spark = await conn.fetch(
+            "select date_trunc('minute', ts) as t, count(*) as n from audit_events "
+            "group by 1 order by 1 desc limit 20")
+    return {
+        "open_incidents": open_incidents, "critical_incidents": critical,
+        "min_coverage_days": float(min_cover or 0),
+        "erp_gap_units": int(erp_gap or 0),
+        "delayed_pos": delayed,
+        "contradictions_caught": int(contradictions or 0),
+        "agent_spend_inr": float(spend or 0),
+        "approval_threshold": APPROVAL_THRESHOLD_INR,
+        "constraints_enforced": {r["c"]: r["n"] for r in rejects if r["c"]},
+        "avg_trust": float(trust["avg_trust"] or 0),
+        "worst_trust": float(trust["worst"] or 0),
+        "activity": [{"t": r["t"].isoformat(), "n": r["n"]} for r in reversed(spark)],
+    }
+
+
+@app.get("/api/network")
+async def network():
+    """Supplier -> plant graph for the flow view. Geography, not a map engine."""
+    pool = await db()
+    async with pool.acquire() as conn:
+        plant = await conn.fetchrow(
+            "select id, name, city, lat, lng from warehouses where id='Pune-Plant-1'")
+        sup = await conn.fetch(
+            """select s.id, s.name, s.city, s.country, s.lat, s.lng,
+                      se.effective_reliability, se.contradictions_detected,
+                      array_agg(distinct l.mode::text) as modes,
+                      min(l.transit_days) as transit_days,
+                      array_agg(distinct sc.component_id) as components
+                 from suppliers s
+                 join supplier_effective se on se.supplier_id = s.id
+                 left join supplier_lanes l on l.supplier_id = s.id
+                 left join supplier_catalog sc on sc.supplier_id = s.id
+                group by s.id, s.name, s.city, s.country, s.lat, s.lng,
+                         se.effective_reliability, se.contradictions_detected""")
+        shipments = await conn.fetch(
+            """select p.id, p.supplier_id, p.component_id, p.status::text as status,
+                      p.mode::text as mode, p.quantity, p.total_value,
+                      p.expected_delivery, t.supplier_claim, t.tracking_status
+                 from purchase_orders p
+                 left join shipment_tracking t on t.po_id = p.id
+                where p.status in ('open','in_transit','delayed')""")
+    now = CLOCK.now()
+    ships = []
+    for r in shipments:
+        contradiction = (r["supplier_claim"] in ("dispatched", "in_transit")
+                         and r["tracking_status"] in ("label_created_no_pickup", "not_shipped"))
+        hrs = (r["expected_delivery"] - now).total_seconds() / 3600
+        ships.append({**dict(r), "contradiction": contradiction,
+                      "hours_to_eta": round(hrs, 1),
+                      "progress": max(0.05, min(0.95, 1 - (hrs / 240)))})
+    return {"plant": dict(plant) if plant else None,
+            "suppliers": [dict(r) for r in sup],
+            "shipments": ships}
 
 
 # ------------------------------------------------------------- websocket ---
