@@ -194,11 +194,18 @@ async def emit(
     incident_id: str | None = None,
     payload: dict[str, Any] | None = None,
     scenario_run_id: int | None = None,
+    agent_reason: str | None = None,
 ) -> dict[str, Any]:
     """Write one audit event and push it to every dashboard.
 
-    ONE event, four representations: human trail, dev log, websocket, and the
-    Decision Explorer. Never write a separate human log.
+    ONE event, THREE PROJECTIONS:
+
+        human_summary     what a plant manager reads
+        agent_reason      why the agent did it
+        technical_payload ids, constraints, state transitions
+
+    The Business / Agent / Technical tabs are views over this row. They are not
+    three log systems, so they cannot disagree about what happened.
 
     `ts` is wall-clock and is NOT reproducible across runs. `simulated_at_seconds`
     is the axis you compare two runs on.
@@ -211,16 +218,18 @@ async def emit(
     row = await conn.fetchrow(
         """
         insert into audit_events
-            (incident_id, actor, event_type, human_summary, technical_payload,
-             scenario_run_id, simulated_at_seconds)
-        values ($1, $2, $3, $4, $5::jsonb, $6, $7)
+            (incident_id, actor, event_type, human_summary, agent_reason,
+             technical_payload, scenario_run_id, simulated_at_seconds)
+        values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
         returning sequence, incident_id, ts, actor, event_type, human_summary,
-                  technical_payload, scenario_run_id, simulated_at_seconds
+                  agent_reason, technical_payload, scenario_run_id,
+                  simulated_at_seconds
         """,
         incident_id,
         actor,
         event_type,
         human_summary,
+        agent_reason,
         json.dumps(payload or {}, default=str),
         run_id,
         sim_seconds,

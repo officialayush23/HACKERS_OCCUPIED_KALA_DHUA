@@ -375,12 +375,113 @@ an operator actually asks. Reordered around **situation → impact → recommend
 
 ### Still to do — the rest of the critique
 
+- [x] Decision Explorer led by the recommendation, with the scoring matrix behind a drill-down
+- [x] Communications as an inbox: `Needs reply` / `AI conversations` / `Suppliers` /
+      `Warehouse` tabs, and an explicit autonomous / draft-only / human-takeover mode per
+      thread
+- [x] Warehouse reduced to *My Tasks* — a warehouse operator never sees a weighted score
+- [x] Audit Trail split into Business / Agent / Technical views
 - [ ] Incident page as the main operational workspace (header → what changed → recommendation →
       collapsed activity)
-- [ ] Decision Explorer led by the recommendation, with the scoring matrix behind a drill-down
-- [ ] Communications as an inbox: `Needs reply` / `AI conversations` / `Warehouse` tabs, and an
-      explicit autonomous / draft-only / human-takeover mode per thread
-- [ ] Warehouse reduced to *My Tasks* — a warehouse operator should never see a weighted score
 - [ ] Network dims everything not on the affected path when a disruption is live
-- [ ] Audit Trail split into Business / Agent / Technical views
 - [ ] Simulation transport controls — play, pause, speed, scrub
+
+---
+
+## T11 — Supplier portal ✅ done
+
+The third actor. Until this, "the supplier claims dispatch and the agent catches it" was a
+persona firing a hardcoded string at a timer — a **scripted liar proves nothing about an
+agent**, and a judge had no way to disagree with it. Now a person sits at
+`/supplier/SUP-21` and decides whether to tell the truth.
+
+- [x] `/supplier/<id>` and `/supplier` (directory), lazy-loaded out of the ops bundle
+- [x] Structured quote — qty · price · lead · mode · MOQ · certifications — composed into
+      **prose** before it is sent, because the parser has to read an offer out of sentences
+      the way it will in production
+- [x] **Applied quotes write through to `supplier_catalog`**, which is what the solver
+      reads. Drop your price at the portal and the recommendation moves on the operations
+      screen. An offer that cannot change the plan is theatre.
+- [x] Hedged reply · decline · free text — the three non-quote answers, each with a
+      different downstream consequence
+- [x] Dispatch claims, including false ones. Contradiction detection extended to fire when
+      the **claim arrives after** the carrier data, not just before — the old code only
+      checked one direction, and a portal user does it in the other one.
+- [x] **Presence beats the script**: while a portal is open that supplier's persona stands
+      down and the agent emits `AWAITING_COUNTERPARTY` instead of inventing an answer.
+      Close the tab, personas resume, unattended demo still runs.
+- [x] Certifications asserted at the portal are recorded as a *claim* and never written to
+      `suppliers.certifications`. `CERTIFICATION_CLAIM_UNVERIFIED` says so out loud.
+- [x] The supplier sees their own trust score and its history — the number they can move,
+      and the only thing that raises it is delivering when they said they would
+
+---
+
+## T12 — Thread autonomy ✅ done
+
+"The agent emailed my supplier in my name" is the single most common reason a buyer refuses
+to switch a tool like this on. Autonomy is a property of the **conversation**, not a global
+switch.
+
+- [x] `message_threads.autonomy` — `autonomous` | `draft` | `human`
+- [x] Draft mode holds the message at `delivery_state='draft'` and emits `MESSAGE_DRAFTED`;
+      a draft is deliberately **not** logged as `MESSAGE_SENT`, because a sentence in the
+      audit trail that never left the building is how an auditor stops trusting the rest of it
+- [x] Human mode logs what it *would* have written (`MESSAGE_SUPPRESSED`) rather than going
+      silent
+- [x] Release a draft, edited or not — an edit is recorded as the human's, not the agent's
+
+---
+
+## T13 — The human input queue ✅ done
+
+`HUMAN_INPUT_REQUIRED` was already being emitted with a confidence and three options
+attached, and **nothing rendered it** — the agent was politely asking a question into a log
+file.
+
+- [x] `human_input_requests` table with a status, so a question can be answered
+- [x] Deduped while open on (kind, thread, supplier) — asking the same question four times
+      is how a queue becomes something people stop reading
+- [x] Every option **does** something and says what before you press it: chase for a firm
+      commitment · take the thread over · exclude that supplier and replan
+- [x] Surfaced in the action queue and the NOW bar alongside approvals, because a question
+      it declined to answer is as blocking as a spend it declined to make
+
+---
+
+## T14 — Decision intelligence ✅ done
+
+The Decision Explorer is a comparison. The person who signs asks a different five questions.
+
+- [x] `intelligence.py` — evidence → conclusion → action → why → confidence, assembled from
+      rows that already exist. **No LLM.**
+- [x] Every evidence row names what it was **checked against** and carries a verdict:
+      corroborated · contradicted · single source · not a commitment · unanswered
+- [x] Confidence is arithmetic: starts at 1.00, published deductions per verdict, the
+      subtractions listed so the number can be rebuilt by hand and argued with
+- [x] "What would change it" — the specific act that lifts confidence, not a platitude
+
+---
+
+## T15 — Scenario builder ✅ done
+
+- [x] `GET /api/scenarios/context` — the world in human-readable labels, with the foreign
+      keys the UI needs to make one dropdown narrow another
+- [x] `EVENT_SCHEMA` is the single source the form, the validator and the reference panel
+      are all generated from, so they cannot drift
+- [x] Builder tab: pick a part → every shipment list narrows to it; pick a shipment → the
+      supplier shows locked, derived from the order
+- [x] `POST /api/scenarios/validate` — two passes: shape against the schema, then every ID
+      it names must be a row that exists. Errors name the event, the field, and what was
+      expected.
+- [x] JSON tab with a schema reference and click-to-copy real IDs
+- [x] **Create a test supplier** — build your own trap ("the cheapest one has no AEC-Q100")
+      without editing the seed. Flagged `origin='test'`, gone on reset.
+- [x] Two new event types, `supplier_reply` and `warehouse_reply`, which inject prose down
+      the *same* path a human at a portal uses
+- [x] Every built-in scenario now carries **why it exists** and **what to watch for**
+- [x] Three buttons: Run · Reset · Hard reset (confirmed, and honest about what it destroys)
+- [x] Reset now also clears threads, messages, recovery plans, constraints, warehouse tasks
+      and open questions — all of which held no foreign key into the seeded world and were
+      quietly surviving it. A "clean" world with four stale conversations in it is worse
+      than not resetting at all.

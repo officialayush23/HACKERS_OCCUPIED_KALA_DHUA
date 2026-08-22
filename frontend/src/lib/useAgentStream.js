@@ -33,7 +33,9 @@ export function useAgentStream() {
   // Anything derived from the world rather than pushed down the socket.
   const refresh = useCallback(() => {
     for (const k of ['now', 'kpis', 'warehouse', 'approvals', 'incidents',
-                     'network', 'world', 'threads', 'solve', 'context', 'runs']) {
+                     'network', 'world', 'threads', 'solve', 'context', 'runs',
+                     'intelligence', 'human-input', 'supplier', 'supplier-directory',
+                     'scenario-context']) {
       qc.invalidateQueries({ queryKey: [k] })
     }
   }, [qc])

@@ -16,6 +16,7 @@ import DecisionExplorer from '@/components/DecisionExplorer'
 import RunHistory from '@/components/RunHistory'
 import DecisionLog from '@/components/DecisionLog'
 import Accuracy from '@/components/Accuracy'
+import NoRun from '@/components/NoRun'
 import NowBar from '@/components/NowBar'
 import ActionQueue from '@/components/ActionQueue'
 import AgentStatus from '@/components/AgentStatus'
@@ -100,7 +101,7 @@ const SUBTITLE = {
   warehouse: 'Physical reality at Pune Plant',
 }
 
-function Overview({ events, revision, onGoto }) {
+function Overview({ events, revision, onGoto, onRunSim }) {
   const { data: kpi } = useQuery({
     queryKey: ['kpis', revision], queryFn: api.kpis, refetchInterval: 4000 })
   const { data: ctx } = useQuery({ queryKey: ['context'], queryFn: api.context })
@@ -110,10 +111,25 @@ function Overview({ events, revision, onGoto }) {
   // One source of truth. Reading risk from `incidents` while reading the numbers
   // from `context` is what let this screen say "all clear" and "short by 310"
   // in the same breath.
-  const atRisk = now?.production_at_risk ?? false
+  // No run means no evidence. The baseline topology is still real, but nothing
+  // that claims something happened may render.
+  const hasRun = now?.has_run ?? false
+  const atRisk = (now?.production_at_risk ?? false) && hasRun
   const order = now?.worst ?? null
   const incident = (now?.incidents ?? [])[0] ?? null
   const cover = now?.min_coverage_days ?? null
+
+  if (!hasRun) {
+    return (
+      <NoRun
+        title="No active test run"
+        what="Nothing has been injected yet, so there is no incident, no decision and
+              no agent activity to show. The supplier network below is the static
+              baseline — it is the world a test will run against, not a result."
+        onRun={onRunSim}
+        baseline="Baseline topology loaded · no active disruption" />
+    )
+  }
 
   return (
     <div className="grid h-full grid-cols-12">
@@ -296,7 +312,8 @@ export default function App() {
             transition={{ duration: 0.18 }} className="min-h-0 flex-1 overflow-hidden">
 
             {page === 'command' && (
-              <Overview events={events} revision={revision} onGoto={setPage} />
+              <Overview events={events} revision={revision} onGoto={setPage}
+                        onRunSim={() => setSimOpen(true)} />
             )}
 
             {page === 'network' && <LiveNetwork revision={revision} />}
@@ -332,7 +349,7 @@ export default function App() {
             {page === 'scoring' && (
               <div className="grid h-full grid-cols-12">
                 <div className="col-span-7 min-h-0 border-r">
-                  <Accuracy revision={revision} />
+                  <Accuracy revision={revision} onRunSim={() => setSimOpen(true)} />
                 </div>
                 <ScrollArea className="glass-panel col-span-5 min-h-0">
                   <RunHistory revision={revision} />

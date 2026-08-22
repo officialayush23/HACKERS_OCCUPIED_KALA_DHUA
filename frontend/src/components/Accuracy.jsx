@@ -4,6 +4,7 @@ import {
   AlertTriangle, Check, Gauge, PackageCheck, ShieldCheck, TriangleAlert, UserCheck,
 } from 'lucide-react'
 import { api } from '@/lib/api'
+import NoRun from '@/components/NoRun'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
@@ -57,12 +58,26 @@ function tone(pct, critical) {
   return pct >= 90 ? 'text-ok' : pct >= 60 ? 'text-warn' : 'text-danger'
 }
 
-export default function Accuracy({ revision }) {
+export default function Accuracy({ revision, onRunSim }) {
   const { data } = useQuery({
     queryKey: ['accuracy', revision], queryFn: api.accuracy, refetchInterval: 5000 })
+  const { data: run } = useQuery({
+    queryKey: ['activeRun'], queryFn: api.activeRun, refetchInterval: 4000 })
 
   const interp = data?.interpretation
   const violations = data?.constraint_compliance?.detail ?? []
+
+  // Zeros here would read as "the agent failed everything" when in fact nothing
+  // has been asked of it. That is a different, and much worse, claim.
+  if (!run?.active) {
+    return (
+      <NoRun icon={Gauge}
+             title="Not evaluated"
+             what="Accuracy is measured against a run's own artefacts. With no run there is
+                   nothing to measure — these are not zeros, they are unasked questions."
+             onRun={onRunSim} />
+    )
+  }
 
   return (
     <ScrollArea className="h-full">

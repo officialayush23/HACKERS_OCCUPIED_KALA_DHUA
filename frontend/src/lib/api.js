@@ -28,12 +28,16 @@ export const api = {
 
   // simulation
   scenarios:   ()          => req('/api/scenarios'),
+  scenarioContext: ()      => req('/api/scenarios/context'),
+  validateScenario: (b)    => post('/api/scenarios/validate', b),
   inject:      (id)        => post(`/api/scenarios/${id}/inject`),
   customScenario: (b)      => post('/api/scenarios/custom', b),
   removeScenario: (id)     => req(`/api/scenarios/custom/${id}`, { method: 'DELETE' }),
   reset:       (m='demo')  => post(`/api/scenarios/reset?mode=${m}`),
   customEvent: (b)         => post('/api/events/custom', b),
   log:         (text)      => post('/api/logs', { text }),
+  createSupplier: (b)      => post('/api/world/suppliers', b),
+  deleteSupplier: (id)     => req(`/api/world/suppliers/${id}`, { method: 'DELETE' }),
 
   // agent
   agentSteps:  (id)        => req(`/api/agent/steps/${id}`),
@@ -46,6 +50,27 @@ export const api = {
   // comms
   threads:     (id)        => req('/api/threads' + (id ? `?incident_id=${id}` : '')),
   sendMessage: (b)         => post('/api/threads/message', b),
+  setAutonomy: (id, mode)  => post(`/api/threads/${id}/autonomy`, { mode }),
+  sendDraft:   (id, body)  => post(`/api/threads/messages/${id}/send`,
+                                   body ? { body } : {}),
+
+  // supplier portal — the third actor
+  supplierDirectory: ()    => req('/api/suppliers'),
+  supplier:    (id)        => req(`/api/supplier/${id}`),
+  supplierPresence: (id, leaving = false) =>
+    post(`/api/supplier/${id}/presence${leaving ? '?leaving=true' : ''}`),
+  supplierReply: (id, b)   => post(`/api/supplier/${id}/reply`, b),
+  supplierClaim: (id, b)   => post(`/api/supplier/${id}/claim`, b),
+
+  // the questions the agent refused to answer
+  humanInput:  ()          => req('/api/human-input'),
+  resolveInput:(id, b)     => post(`/api/human-input/${id}/resolve`, b),
+
+  // the brief
+  intelligence: (incidentId, poId) => req(
+    '/api/intelligence'
+    + (incidentId ? `?incident_id=${incidentId}`
+       : poId ? `?production_order_id=${poId}` : '')),
 
   // warehouse
   warehouse:   ()          => req('/api/warehouse'),
@@ -56,6 +81,8 @@ export const api = {
   approvals:   ()          => req('/api/approvals'),
   decide:      (id, b)     => post(`/api/approvals/${id}/decide`, b),
   accuracy:    ()          => req('/api/accuracy'),
+  activeRun:   ()          => req('/api/runs/active'),
+  hardReset:   ()          => post('/api/system/hard-reset'),
   solve:       (po, rec, exclude = []) => req(
     `/api/solve/${po}?record=${rec ? 'true' : 'false'}` +
     (exclude.length ? `&exclude=${exclude.join(',')}` : '')),

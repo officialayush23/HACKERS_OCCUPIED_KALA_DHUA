@@ -34,6 +34,16 @@ _STATE: dict[str, dict[str, Any]] = {}
 _RUNNING: dict[str, asyncio.Task] = {}
 
 
+def forget_all() -> None:
+    """Drop every in-memory checkpoint.
+
+    A hard reset that empties the database but leaves the agent holding state
+    for incidents that no longer exist produces exactly the ghosts it was meant
+    to remove.
+    """
+    _STATE.clear()
+
+
 def state_of(incident_id: str) -> dict[str, Any] | None:
     return _STATE.get(incident_id)
 
@@ -101,10 +111,11 @@ async def wake(conn, *, component_id: str, trigger: str,
         incident_id = await next_incident_id(conn)
         await conn.execute(
             """insert into incidents (id, type, severity, status, component_id, source_po_id,
-                                      thread_id, title, details)
-               values ($1,'production_risk',$2::severity_level,'open',$3,$4,$1,$5,$6::jsonb)""",
+                                      thread_id, title, details, scenario_run_id)
+               values ($1,'production_risk',$2::severity_level,'open',$3,$4,$1,$5,$6::jsonb,$7)""",
             incident_id, verdict.severity, component_id, po_id, verdict.headline,
-            json.dumps({"trigger": trigger, "verdict": verdict.to_dict()}, default=str))
+            json.dumps({"trigger": trigger, "verdict": verdict.to_dict()}, default=str),
+            (run_context() or {}).get("run_id"))
         await emit(conn, incident_id=incident_id, actor="risk_detector",
                    event_type="INCIDENT_OPENED",
                    human_summary=f"Opened automatically — {verdict.headline}",

@@ -1,7 +1,7 @@
 import { motion } from 'motion/react'
 import {
-  Activity, Boxes, CheckCircle2, Gauge, GitBranch, LayoutGrid, MessageSquare,
-  Moon, Scale, Sun, TriangleAlert, Warehouse,
+  Activity, Boxes, CheckCircle2, CircleHelp, Gauge, GitBranch, LayoutGrid,
+  MessageSquare, Moon, Scale, Sun, TriangleAlert, Warehouse,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -27,6 +27,7 @@ export const NAV_GROUPS = [
     items: [
       { id: 'audit',     label: 'Agent Activity', icon: Activity,      sub: 'what it did, and why' },
       { id: 'comms',     label: 'Conversations',  icon: MessageSquare, sub: 'suppliers & warehouse' },
+      { id: 'questions', label: 'Its Questions',  icon: CircleHelp,    sub: 'what it would not guess' },
       { id: 'approvals', label: 'Approvals',      icon: CheckCircle2,  sub: 'over its authority' },
     ],
   },
@@ -52,7 +53,8 @@ export const ALL_NAV = NAV_GROUPS.flatMap((g) => g.items)
  * Collapsed, every item keeps its badge and gains a tooltip — an operator who
  * has folded the nav away should still see that three approvals are waiting.
  */
-export function Sidebar({ page, onPage, status, criticals, tasks, approvals, org }) {
+export function Sidebar({ page, onPage, status, criticals, tasks, approvals,
+                          questions = 0, org }) {
   const { state } = useSidebar()
   const collapsed = state === 'collapsed'
 
@@ -86,6 +88,7 @@ export function Sidebar({ page, onPage, status, criticals, tasks, approvals, org
                   const badge =
                     n.id === 'command' ? criticals :
                     n.id === 'approvals' ? approvals :
+                    n.id === 'questions' ? questions :
                     n.id === 'warehouse' ? tasks : 0
                   return (
                     <SidebarMenuItem key={n.id}>

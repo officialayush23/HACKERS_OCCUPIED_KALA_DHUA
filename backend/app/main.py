@@ -18,11 +18,12 @@ from pydantic import BaseModel
 from .core import (APPROVAL_THRESHOLD_INR, CLOCK, HUB, close_db, db, emit,
                     set_run_context)
 from . import injector
-from .scenarios import (EVENT_TYPES, SCENARIOS, list_scenarios,
-                        register_custom, unregister_custom)
+from .scenarios import (EVENT_SCHEMA, EVENT_TYPES, REF_TABLES, SCENARIOS,
+                        list_scenarios, referenced_ids, register_custom,
+                        unregister_custom, validate_custom)
 from .solver import solve_for_production_order
 from .scorer import score_run
-from . import agent, comms, learning, llm
+from . import agent, comms, intelligence, learning, llm, supplier_portal
 from .risk import assess as assess_risk
 
 SEED_PATH = pathlib.Path(__file__).resolve().parents[2] / "supabase" / "seed.sql"
@@ -90,7 +91,131 @@ async def clock_rate(seconds_per_sim_hour: float):
 @app.get("/api/scenarios")
 async def scenarios():
     return {"scenarios": list_scenarios(), "running": injector.running(),
-            "event_types": EVENT_TYPES}
+            "event_types": EVENT_TYPES, "event_schema": EVENT_SCHEMA}
+
+
+# NB: this route and /validate must be declared BEFORE /api/scenarios/{scenario_id}.
+# FastAPI matches in registration order, and a path parameter will happily
+# swallow the literal "context" if it gets there first.
+@app.get("/api/scenarios/context")
+async def scenario_context():
+    """The world as it stands, in the words a person uses for it.
+
+    The scenario builder is generated from this. Nobody should ever have to type
+    an ID: they pick "PO-7712 — Motor Driver IC — 1000 units from Zhen Hua
+    Electronics" and the ID travels underneath.
+
+    Every list carries the foreign keys the UI needs to make one dropdown narrow
+    another — choose a component and only that component's shipments remain.
+    """
+    pool = await db()
+    async with pool.acquire() as conn:
+        comps = await conn.fetch(
+            """select c.id, coalesce(c.display_name, c.name) as name, c.part_number,
+                      c.category, c.is_hazmat, c.required_certifications, c.origin,
+                      i.usable_stock, i.erp_stock, i.daily_usage, i.safety_stock,
+                      round(i.usable_stock::numeric / nullif(i.daily_usage,0),1)
+                        as coverage_days
+                 from components c
+                 left join inventory i on i.component_id = c.id
+                order by coverage_days nulls last, c.id""")
+        sups = await conn.fetch(
+            """select s.id, coalesce(s.legal_name, s.name) as name, s.city, s.country,
+                      s.certifications, s.quality_score, s.origin,
+                      se.effective_reliability,
+                      array_agg(distinct sc.component_id)
+                        filter (where sc.component_id is not null) as components,
+                      array_agg(distinct l.mode::text)
+                        filter (where l.mode is not null) as modes
+                 from suppliers s
+                 join supplier_effective se on se.supplier_id = s.id
+                 left join supplier_catalog sc on sc.supplier_id = s.id
+                 left join supplier_lanes l on l.supplier_id = s.id
+                group by s.id, s.legal_name, s.name, s.city, s.country, s.certifications,
+                         s.quality_score, s.origin, se.effective_reliability
+                order by s.id""")
+        pos = await conn.fetch(
+            """select p.id, p.component_id, p.supplier_id, p.quantity,
+                      p.status::text as status, p.mode::text as mode,
+                      p.expected_delivery, p.created_by_agent,
+                      coalesce(c.display_name, c.name) as component_name,
+                      coalesce(s.legal_name, s.name) as supplier_name,
+                      t.supplier_claim, t.tracking_status
+                 from purchase_orders p
+                 join components c on c.id = p.component_id
+                 join suppliers s on s.id = p.supplier_id
+                 left join shipment_tracking t on t.po_id = p.id
+                where p.status <> 'cancelled'
+                order by p.expected_delivery""")
+        prods = await conn.fetch(
+            """select po.id, po.required_component as component_id, po.units_planned,
+                      po.component_per_unit, po.priority::text as priority, po.deadline,
+                      po.oem_customer, po.allocated_units, po.is_on_hold,
+                      pr.name as product_name,
+                      coalesce(c.display_name, c.name) as component_name
+                 from production_orders po
+                 left join products pr on pr.id = po.product_id
+                 join components c on c.id = po.required_component
+                order by po.deadline""")
+        whs = await conn.fetch("select id, name, city from warehouses order by id")
+
+    def po_label(p):
+        return (f"{p['id']} — {p['component_name']} — {p['quantity']} units "
+                f"from {p['supplier_name']}")
+
+    return {
+        "clock": CLOCK.state(),
+        "components": [
+            {**dict(c), "label": f"{c['name']} ({c['id']})"} for c in comps],
+        "suppliers": [
+            {**dict(s), "label": f"{s['name']} ({s['id']})",
+             "staffed": supplier_portal.present(s["id"])} for s in sups],
+        "purchase_orders": [{**dict(p), "label": po_label(p)} for p in pos],
+        "production_orders": [
+            {**dict(p),
+             "label": (f"{p['product_name'] or p['id']} for {p['oem_customer']} — "
+                       f"{p['units_planned']} units, {p['priority']} priority")}
+            for p in prods],
+        "warehouses": [{**dict(w), "label": f"{w['name']} ({w['id']})"} for w in whs],
+        "approval_threshold": APPROVAL_THRESHOLD_INR,
+    }
+
+
+class ValidateBody(BaseModel):
+    name: str = "Untitled"
+    events: list[dict[str, Any]] = []
+
+
+@app.post("/api/scenarios/validate")
+async def validate_scenario(body: ValidateBody):
+    """Say whether a scenario would run, and if not, exactly why.
+
+    Two passes. The first checks the shape against `EVENT_SCHEMA` — required
+    fields, ranges, enum values. The second checks that every ID it names is a
+    row that actually exists, because `PO-9999` should fail here rather than
+    forty seconds into a run in front of an audience.
+    """
+    try:
+        clean = validate_custom(body.name, body.events)
+    except ValueError as e:
+        return {"ok": False, "errors": [str(e)], "events": []}
+
+    errors: list[str] = []
+    pool = await db()
+    async with pool.acquire() as conn:
+        for where, field, ref_type, value in referenced_ids(clean):
+            table, human = REF_TABLES[ref_type]
+            exists = await conn.fetchval(
+                f"select 1 from {table} where id = $1", value)   # table name is
+            if not exists:                                       # from a fixed dict
+                near = await conn.fetch(
+                    f"select id from {table} order by id limit 6")
+                errors.append(
+                    f"{where}: no {human} called '{value}'. "
+                    f"Try one of: {', '.join(r['id'] for r in near)}")
+
+    return {"ok": not errors, "errors": errors, "events": clean,
+            "span_sim_hours": max((e["at_h"] for e in clean), default=0)}
 
 
 @app.get("/api/scenarios/{scenario_id}")
@@ -194,9 +319,29 @@ async def reset(mode: str = "demo"):
             "update scenario_runs set status='reset', finished_at=now() "
             "where status='running'")
         await conn.execute(sql)
+
+        # Tables that hold no foreign key into the seeded world, and therefore
+        # were quietly surviving a reset. A "clean" world showing four supplier
+        # conversations and two unanswered questions from the previous run is
+        # worse than not resetting at all, because you only find out when the
+        # agent replies to a thread that no longer means anything.
+        await conn.execute(
+            "truncate message_threads, thread_messages restart identity cascade")
+        await conn.execute("truncate recovery_plans restart identity cascade")
+        await conn.execute("truncate agent_constraints restart identity cascade")
+        await conn.execute("truncate human_input_requests restart identity cascade")
+        await conn.execute("truncate warehouse_tasks restart identity cascade")
+
         if mode == "hard":
             await conn.execute(
                 "truncate run_scores, scenario_runs, audit_events restart identity cascade")
+
+    # In-process state has to go with it, or the agent keeps a checkpoint for an
+    # incident that no longer exists and refuses to reopen the same component.
+    agent._STATE.clear()
+    for task in list(agent._RUNNING.values()):
+        task.cancel()
+    agent._RUNNING.clear()
     set_run_context(None)
     CLOCK.reset()
 
@@ -253,6 +398,108 @@ async def incidents():
     return {"incidents": [dict(r) for r in rows]}
 
 
+async def _reset_floor(conn) -> int:
+    """Sequence of the most recent WORLD_RESET, or 0 if the world was never reset.
+
+    Every endpoint that aggregates over `audit_events` for a "what's true right
+    now" panel (KPIs, network activity, accuracy, the assistant's grounding)
+    must exclude anything at or before this mark — otherwise a reset world
+    keeps narrating a run that no longer exists. `/api/audit` was the only
+    place this was applied; the others quietly re-introduced the exact bug the
+    WORLD_RESET marker was invented to fix.
+    """
+    mark = await conn.fetchval(
+        "select max(sequence) from audit_events where event_type='WORLD_RESET'")
+    return int(mark) if mark else 0
+
+
+async def _active_run_id(conn) -> int | None:
+    """The run the dashboard is scoped to, or None.
+
+    None means *no run*, and every screen must then show an empty state rather
+    than zeros. A 0% score with no run is a lie about a thing that never
+    happened; `null` is not `0`.
+    """
+    return await conn.fetchval("select scenario_run_id from active_run where id")
+
+
+async def _set_active_run(conn, run_id: int | None) -> None:
+    await conn.execute(
+        "update active_run set scenario_run_id=$1, updated_at=now() where id", run_id)
+
+
+@app.get("/api/runs/active")
+async def active_run():
+    """What the UI is looking at. The answer is allowed to be nothing."""
+    pool = await db()
+    async with pool.acquire() as conn:
+        run_id = await _active_run_id(conn)
+        if run_id is None:
+            return {"active": None,
+                    "note": "No test run. Baseline topology only — nothing has happened yet."}
+        run = await conn.fetchrow(
+            """select r.*, (select count(*) from audit_events e
+                             where e.scenario_run_id = r.id) as event_count,
+                      (select count(*) from incidents i
+                        where i.scenario_run_id = r.id) as incident_count,
+                      (select count(*) from recovery_plans p
+                        where p.scenario_run_id = r.id) as decision_count,
+                      (select count(*) from evaluation_results v
+                        where v.scenario_run_id = r.id) as evaluated
+                 from scenario_runs r where r.id=$1""", run_id)
+        if run is None:
+            await _set_active_run(conn, None)
+            return {"active": None, "note": "The active run no longer exists."}
+        d = dict(run)
+        d["title"] = SCENARIOS.get(d.get("scenario_id"), {}).get("title", d.get("scenario_id"))
+        d["tests"] = SCENARIOS.get(d.get("scenario_id"), {}).get("tests")
+        return {"active": d}
+
+
+@app.post("/api/system/hard-reset")
+async def hard_reset():
+    """Delete every runtime artefact. Keep the static baseline.
+
+    After this returns, there is no run, no incident, no decision, no log, no
+    score. The suppliers, components, plants and policies survive — those are
+    the world, not evidence about it.
+
+    The frontend must also clear its cache; a clean backend behind a stale React
+    cache still shows ghosts.
+    """
+    await injector.stop_all()
+    if not SEED_PATH.exists():
+        raise HTTPException(500, f"seed file not found at {SEED_PATH}")
+    sql = SEED_PATH.read_text(encoding="utf-8")
+
+    pool = await db()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Runtime artefacts, in dependency order. `restart identity` so the
+            # next run is run 1 — a fresh world should not start at run 7.
+            await conn.execute("""
+                truncate evaluation_results, reliability_events, goods_receipts,
+                         warehouse_tasks, thread_messages, message_threads,
+                         recovery_plans, agent_constraints, approvals,
+                         shipment_positions, run_scores, audit_events,
+                         scenario_runs, incidents
+                restart identity cascade""")
+            # The baseline world, re-seeded.
+            await conn.execute(sql)
+            await _set_active_run(conn, None)
+
+    set_run_context(None)
+    CLOCK.reset()
+    agent.forget_all()
+    await HUB.broadcast({"kind": "world_reset", "mode": "hard", "clock": CLOCK.state()})
+    return {"ok": True, "mode": "hard", "active_run": None,
+            "cleared": ["test runs", "incidents", "decisions", "audit events",
+                        "communications", "warehouse tasks", "approvals",
+                        "evaluations", "scores", "supplier learning"],
+            "kept": ["suppliers", "components", "warehouses", "policies",
+                     "baseline inventory", "production orders"]}
+
+
 @app.get("/api/audit")
 async def audit(incident_id: str | None = None, run_id: int | None = None,
                 after: int = 0, limit: int = 300, since_reset: bool = True):
@@ -265,11 +512,15 @@ async def audit(incident_id: str | None = None, run_id: int | None = None,
     """
     pool = await db()
     async with pool.acquire() as conn:
-        if since_reset and run_id is None:
-            mark = await conn.fetchval(
-                "select max(sequence) from audit_events where event_type='WORLD_RESET'")
-            if mark:
-                after = max(after, int(mark))
+        # Default scope is the ACTIVE RUN. Showing events from a run that has been
+        # reset away, next to a freshly seeded world, is how the activity feed
+        # came to narrate work that no longer existed.
+        if since_reset and run_id is None and incident_id is None:
+            run_id = await _active_run_id(conn)
+            if run_id is None:
+                return {"events": [], "scope": "no active run"}
+        elif since_reset and run_id is None:
+            after = max(after, await _reset_floor(conn))
         if run_id is not None:
             rows = await conn.fetch(
                 """select * from audit_events
@@ -467,15 +718,16 @@ async def kpis():
             "select coalesce(sum(contradictions_detected),0) from supplier_memory")
         spend = await conn.fetchval(
             "select coalesce(sum(total_value),0) from purchase_orders where created_by_agent")
+        floor = await _reset_floor(conn)
         rejects = await conn.fetch(
             "select technical_payload->>'constraint' as c, count(*) as n from audit_events "
-            "where event_type='OPTION_REJECTED' group by 1")
+            "where event_type='OPTION_REJECTED' and sequence > $1 group by 1", floor)
         trust = await conn.fetchrow(
             "select round(avg(effective_reliability),3) as avg_trust, "
             "min(effective_reliability) as worst from supplier_effective")
         spark = await conn.fetch(
             "select date_trunc('minute', ts) as t, count(*) as n from audit_events "
-            "group by 1 order by 1 desc limit 20")
+            "where sequence > $1 group by 1 order by 1 desc limit 20", floor)
     return {
         "open_incidents": open_incidents, "critical_incidents": critical,
         "min_coverage_days": float(min_cover or 0),
@@ -522,13 +774,17 @@ async def network():
                  left join shipment_tracking t on t.po_id = p.id
                 where p.status in ('open','in_transit','delayed')""")
         # What the agent actually DID with each supplier. Hovering a node should
-        # answer "and what did you do about it?", not just show a trust number.
+        # answer "and what did you do about it?", not just show a trust number —
+        # but only for the world that exists now. Without the reset floor this
+        # kept narrating a previous run's actions on a freshly reseeded graph.
+        floor = await _reset_floor(conn)
         acts = await conn.fetch(
             """select technical_payload->>'supplier_id' as supplier_id,
                       event_type, human_summary, ts, sequence
                  from audit_events
                 where technical_payload->>'supplier_id' is not null
-                order by sequence desc limit 400""")
+                  and sequence > $1
+                order by sequence desc limit 400""", floor)
         learned = await conn.fetch(
             """select supplier_id, event, delta, after_score, reason, created_at
                  from reliability_events order by id desc limit 200""")
@@ -649,9 +905,11 @@ async def agent_ask(body: AskBody):
         plans = await conn.fetch(
             """select incident_id, label, total_cost, status, rationale
                  from recovery_plans order by id desc limit 5""")
+        floor = await _reset_floor(conn)
         rejects = await conn.fetch(
             """select human_summary, technical_payload from audit_events
-                where event_type='OPTION_REJECTED' order by sequence desc limit 8""")
+                where event_type='OPTION_REJECTED' and sequence > $1
+                order by sequence desc limit 8""", floor)
         inv = await conn.fetch(
             """select c.display_name, i.usable_stock, i.erp_stock, i.daily_usage
                  from inventory i join components c on c.id=i.component_id""")
@@ -947,12 +1205,14 @@ async def accuracy():
                 violations.append({"po_id": p["id"], "rule": "HAZMAT_NO_AIR",
                                    "detail": "hazmat routed by air"})
 
+        floor = await _reset_floor(conn)
         contradictions_real = await conn.fetchval(
             """select count(*) from shipment_tracking t
                 where t.supplier_claim in ('dispatched','in_transit')
                   and t.tracking_status in ('label_created_no_pickup','not_shipped')""") or 0
         contradictions_caught = await conn.fetchval(
-            "select count(*) from audit_events where event_type='CLAIM_CONTRADICTED'") or 0
+            "select count(*) from audit_events where event_type='CLAIM_CONTRADICTED' "
+            "and sequence > $1", floor) or 0
 
         receipts = await conn.fetch(
             """select g.quantity_received, g.quantity_approved, p.quantity as ordered
@@ -969,7 +1229,7 @@ async def accuracy():
 
         interpreted = await conn.fetch(
             """select technical_payload from audit_events
-                where event_type='MESSAGE_INTERPRETED'""")
+                where event_type='MESSAGE_INTERPRETED' and sequence > $1""", floor)
         parsed = refused = 0
         for r in interpreted:
             pl = r["technical_payload"]
@@ -1050,15 +1310,28 @@ async def now_state():
             """select t.id, t.counterparty_name, t.counterparty_type, t.subject
                  from message_threads t
                 where t.status = 'awaiting_reply' order by t.id desc limit 6""")
+        questions = await conn.fetch(
+            """select h.id, h.incident_id, h.kind, h.question, h.detail, h.confidence
+                 from human_input_requests h
+                where h.status = 'open' order by h.id desc limit 8""")
+        drafts = await conn.fetch(
+            """select m.id, m.thread_id, t.counterparty_name, t.subject
+                 from thread_messages m
+                 join message_threads t on t.id = m.thread_id
+                where m.delivery_state = 'draft' order by m.id desc limit 8""")
+        # Scoped to the active run. An incident from a run that has been reset
+        # away is not "what is happening right now".
+        active_run_id = await _active_run_id(conn)
         incidents = await conn.fetch(
             """select i.id, i.status::text as status, i.severity::text as severity,
                       i.title, i.component_id, c.display_name as component_name
                  from incidents i
                  left join components c on c.id = i.component_id
                 where i.status not in ('resolved','failed')
+                  and ($1::bigint is null or i.scenario_run_id = $1)
                 order by case i.severity::text when 'critical' then 0 when 'high' then 1
                                                when 'medium' then 2 else 3 end,
-                         i.opened_at desc""")
+                         i.opened_at desc""", active_run_id)
         next_delivery = await conn.fetchrow(
             """select p.id, p.expected_delivery, p.quantity, s.name as supplier_name,
                       c.display_name as component_name
@@ -1119,6 +1392,21 @@ async def now_state():
                       "detail": a["reason"],
                       "cost": float(a["estimated_cost"] or 0),
                       "cta": "Review"})
+    # A question the agent declined to answer outranks a warehouse count: it is
+    # already blocked on you, and every minute it waits it is planning without
+    # the thing it said it needed.
+    for q in questions:
+        queue.append({"kind": "question", "urgency": "critical",
+                      "id": f"question-{q['id']}", "incident_id": q["incident_id"],
+                      "request_id": q["id"],
+                      "title": q["question"], "detail": q["detail"],
+                      "confidence": float(q["confidence"] or 0),
+                      "cta": "Answer"})
+    for d in drafts:
+        queue.append({"kind": "draft", "urgency": "high", "id": f"draft-{d['id']}",
+                      "message_id": d["id"], "thread_id": d["thread_id"],
+                      "title": f"Draft waiting for you — {d['counterparty_name']}",
+                      "detail": d["subject"], "cta": "Review and send"})
     for t in tasks:
         queue.append({"kind": "warehouse", "id": f"task-{t['id']}",
                       "urgency": "high" if t["priority"] in ("urgent", "high") else "normal",
@@ -1138,6 +1426,9 @@ async def now_state():
 
     return {
         "clock": CLOCK.state(),
+        # null, not 0. Every screen must show an empty state when there is no run.
+        "active_run_id": active_run_id,
+        "has_run": active_run_id is not None,
         "queue": queue,
         "incidents": [dict(r) for r in incidents],
         "at_risk": risk,
@@ -1181,6 +1472,295 @@ async def business_context():
     return {"organization": dict(org) if org else None,
             "products": [dict(r) for r in prods],
             "production": [dict(r) for r in orders]}
+
+
+# ====================== SUPPLIER PORTAL (third actor) ========================
+#
+# A supplier with a screen, not a timer with a script. See supplier_portal.py
+# for why that distinction is the whole point.
+
+
+class SupplierOffer(BaseModel):
+    component_id: str
+    quantity: int | None = None
+    unit_price: float | None = None
+    lead_time_days: int | None = None
+    mode: str = "ROAD"
+    min_order_quantity: int | None = None
+    certifications: list[str] = []
+    expedite_available: bool = False
+    expedite_fee: float = 0
+    freight_cost: float = 0
+
+
+class SupplierReply(BaseModel):
+    kind: str = "freeform"                 # quote | vague | decline | freeform
+    thread_id: int | None = None
+    body: str = ""
+    note: str = ""
+    offer: SupplierOffer | None = None
+
+
+class SupplierClaim(BaseModel):
+    po_id: str
+    claim: str = "dispatched"
+    note: str = ""
+
+
+@app.get("/api/suppliers")
+async def supplier_directory():
+    pool = await db()
+    async with pool.acquire() as conn:
+        return {"suppliers": await supplier_portal.directory(conn),
+                "staffed": supplier_portal.staffed()}
+
+
+@app.get("/api/supplier/{supplier_id}")
+async def supplier_view(supplier_id: str):
+    pool = await db()
+    async with pool.acquire() as conn:
+        try:
+            return await supplier_portal.overview(conn, supplier_id)
+        except ValueError as e:
+            raise HTTPException(404, str(e))
+
+
+@app.post("/api/supplier/{supplier_id}/presence")
+async def supplier_presence(supplier_id: str, leaving: bool = False):
+    """Heartbeat from an open supplier portal.
+
+    While this is warm the scripted persona for that supplier stands down and
+    the agent genuinely waits for a person. Let it go cold and the personas
+    resume, so an unattended demo still runs end to end.
+    """
+    if leaving:
+        supplier_portal.leave(supplier_id)
+    else:
+        supplier_portal.heartbeat(supplier_id)
+    return {"ok": True, "supplier_id": supplier_id,
+            "staffed": supplier_portal.present(supplier_id),
+            "all_staffed": supplier_portal.staffed()}
+
+
+@app.post("/api/supplier/{supplier_id}/reply")
+async def supplier_reply(supplier_id: str, body: SupplierReply):
+    pool = await db()
+    async with pool.acquire() as conn:
+        try:
+            return await supplier_portal.reply(
+                conn, supplier_id, thread_id=body.thread_id, kind=body.kind,
+                body=body.body, note=body.note,
+                offer=body.offer.model_dump() if body.offer else None)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+
+@app.post("/api/supplier/{supplier_id}/claim")
+async def supplier_claim(supplier_id: str, body: SupplierClaim):
+    """Let a person tell the lie. Catching a script proves nothing."""
+    pool = await db()
+    async with pool.acquire() as conn:
+        try:
+            return await supplier_portal.claim_dispatch(
+                conn, supplier_id, po_id=body.po_id, claim=body.claim, note=body.note)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+
+# ===================== THREAD AUTONOMY + DRAFTS ==============================
+
+
+class AutonomyBody(BaseModel):
+    mode: str                              # autonomous | draft | human
+    by: str = "operator"
+
+
+class SendDraftBody(BaseModel):
+    body: str | None = None
+    sent_by: str = "operator"
+
+
+@app.post("/api/threads/{thread_id}/autonomy")
+async def thread_autonomy(thread_id: int, body: AutonomyBody):
+    pool = await db()
+    async with pool.acquire() as conn:
+        try:
+            return await comms.set_autonomy(conn, thread_id, body.mode, by=body.by)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+
+@app.post("/api/threads/messages/{message_id}/send")
+async def send_draft(message_id: int, body: SendDraftBody):
+    pool = await db()
+    async with pool.acquire() as conn:
+        try:
+            return await comms.send_draft(conn, message_id, edited_body=body.body,
+                                          sent_by=body.sent_by)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+
+# ========================= HUMAN INPUT QUEUE =================================
+
+
+class ResolveInput(BaseModel):
+    choice: str
+    note: str | None = None
+    decided_by: str = "operator"
+
+
+@app.get("/api/human-input")
+async def human_input():
+    """Questions the agent declined to answer, and what it did with the answers.
+
+    Distinct from approvals on purpose. An approval is a decision the agent
+    already made and may not execute. This is a decision it refused to make
+    because the evidence would not carry it — which is the more interesting
+    behaviour and, until now, the one nothing on screen rendered.
+    """
+    pool = await db()
+    async with pool.acquire() as conn:
+        return {"open": await supplier_portal.open_requests(conn),
+                "recent": await supplier_portal.recent_resolved(conn)}
+
+
+@app.post("/api/human-input/{request_id}/resolve")
+async def resolve_human_input(request_id: int, body: ResolveInput):
+    pool = await db()
+    async with pool.acquire() as conn:
+        try:
+            return await supplier_portal.resolve_human_input(
+                conn, request_id, choice=body.choice, note=body.note,
+                decided_by=body.decided_by)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+
+# ======================== DECISION INTELLIGENCE ==============================
+
+
+@app.get("/api/intelligence")
+async def decision_intelligence(incident_id: str | None = None,
+                                production_order_id: str | None = None):
+    """Evidence → conclusion → action → why → confidence.
+
+    The Decision Explorer is a comparison, which is what a procurement analyst
+    wants. This is the brief, which is what the person who has to sign wants.
+    Same rows underneath; different question.
+    """
+    pool = await db()
+    async with pool.acquire() as conn:
+        return await intelligence.brief(conn, incident_id=incident_id,
+                                        production_order_id=production_order_id)
+
+
+# ===================== TEST ENTITIES (build your own trap) ===================
+
+
+class NewSupplier(BaseModel):
+    name: str
+    component_id: str
+    unit_price: float
+    lead_time_days: int = 3
+    available_quantity: int = 500
+    min_order_quantity: int = 1
+    quality_score: float = 0.9
+    reliability_score: float = 0.8
+    certifications: list[str] = []
+    city: str = "Pune"
+    country: str = "India"
+    mode: str = "ROAD"
+    transit_days: int = 2
+    freight_cost: float = 2000
+
+
+@app.post("/api/world/suppliers")
+async def create_test_supplier(body: NewSupplier):
+    """Let somebody build their own trap without editing our seed file.
+
+    "The cheapest supplier has no AEC-Q100" is a test a judge should be able to
+    construct in thirty seconds. Anything created here is flagged `origin=test`
+    and does not survive a reset, so one person's experiment cannot corrupt the
+    next person's run.
+    """
+    if body.unit_price <= 0:
+        raise HTTPException(400, "unit_price must be positive")
+    if not (0 <= body.quality_score <= 1 and 0 <= body.reliability_score <= 1):
+        raise HTTPException(400, "quality and reliability scores are 0–1")
+    mode = body.mode.upper()
+    if mode not in ("AIR", "SEA", "RAIL", "ROAD"):
+        raise HTTPException(400, "mode must be AIR, SEA, RAIL or ROAD")
+
+    pool = await db()
+    async with pool.acquire() as conn:
+        if not await conn.fetchval("select 1 from components where id=$1", body.component_id):
+            raise HTTPException(404, f"unknown component {body.component_id}")
+        n = await conn.fetchval("select count(*) from suppliers where origin='test'")
+        sid = f"SUP-T{901 + int(n)}"
+        await conn.execute(
+            """insert into suppliers (id, name, email, city, country, quality_score,
+                   reliability_score, certifications, origin)
+               values ($1,$2,$3,$4,$5,$6,$7,$8,'test')""",
+            sid, body.name.strip()[:80], f"{sid.lower()}@test.example",
+            body.city, body.country, body.quality_score, body.reliability_score,
+            [c.upper() for c in body.certifications])
+        await conn.execute(
+            "insert into supplier_memory (supplier_id, derived_reliability) values ($1,$2)",
+            sid, body.reliability_score)
+        await conn.execute(
+            """insert into supplier_lanes (supplier_id, warehouse_id, mode, transit_days,
+                   freight_cost)
+               values ($1,'Pune-Plant-1',$2::transport_mode,$3,$4)""",
+            sid, mode, max(1, body.transit_days), body.freight_cost)
+        await conn.execute(
+            """insert into supplier_catalog (supplier_id, component_id, unit_price,
+                   lead_time_days, available_quantity, min_order_quantity)
+               values ($1,$2,$3,$4,$5,$6)""",
+            sid, body.component_id, body.unit_price, max(0, body.lead_time_days),
+            max(0, body.available_quantity), max(1, body.min_order_quantity))
+
+        # Pune-Plant-1 has coordinates; a test supplier without them would vanish
+        # from the network view rather than appear somewhere wrong.
+        await conn.execute(
+            "update suppliers set lat=18.62, lng=73.72, legal_name=$2 where id=$1",
+            sid, body.name.strip()[:80])
+
+        comp = await conn.fetchval(
+            "select coalesce(display_name, name) from components where id=$1",
+            body.component_id)
+        need = await conn.fetchval(
+            "select required_certifications from components where id=$1", body.component_id)
+        missing = sorted(set(need or []) - {c.upper() for c in body.certifications})
+
+        await emit(conn, actor="human", event_type="TEST_ENTITY_CREATED",
+                   human_summary=(
+                       f"Test supplier {body.name} added for {comp} at "
+                       f"Rs {body.unit_price:g}/unit"
+                       + (f" — missing {', '.join(missing)}, so the solver should refuse "
+                          f"them on certification." if missing
+                          else " — fully certified for this component.")),
+                   payload={"supplier_id": sid, "component_id": body.component_id,
+                            "missing_certifications": missing, "origin": "test"})
+    await HUB.broadcast({"kind": "world_changed", "reason": "test_supplier_created"})
+    return {"ok": True, "supplier_id": sid, "missing_certifications": missing,
+            "note": ("This supplier disappears on the next reset, so it cannot "
+                     "contaminate anybody else's run.")}
+
+
+@app.delete("/api/world/suppliers/{supplier_id}")
+async def delete_test_supplier(supplier_id: str):
+    pool = await db()
+    async with pool.acquire() as conn:
+        origin = await conn.fetchval("select origin from suppliers where id=$1", supplier_id)
+        if origin is None:
+            raise HTTPException(404, f"unknown supplier {supplier_id}")
+        if origin != "test":
+            raise HTTPException(
+                403, "only suppliers created from the scenario builder can be removed — "
+                     "seeded ones come back on reset anyway")
+        await conn.execute("delete from suppliers where id=$1", supplier_id)
+    return {"ok": True, "removed": supplier_id}
 
 
 # ------------------------------------------------------------- websocket ---

@@ -79,6 +79,14 @@ async def post(conn, *, thread_id: int, direction: str, author_type: str,
         delivery_state, is_contradiction, sim)
     msg = dict(row)
     await broadcast_state("message", {"thread_id": thread_id, "message": msg})
+
+    # A draft is not a message yet. Logging it as MESSAGE_SENT would put a
+    # sentence in the audit trail that never left the building — which is
+    # precisely the kind of thing an auditor would later find and stop trusting
+    # the rest of the log over.
+    if delivery_state == "draft":
+        return msg
+
     await emit(conn, incident_id=incident_id,
                actor="agent" if author_type == "agent" else author_type,
                event_type="MESSAGE_SENT" if direction == "outbound" else "MESSAGE_RECEIVED",
@@ -96,6 +104,13 @@ async def post(conn, *, thread_id: int, direction: str, author_type: str,
 
 async def agent_message_supplier(conn, *, incident_id: str, supplier_id: str,
                                  kind: str, context: dict) -> int:
+    """Write to a supplier — or draft and stop, if this thread says so.
+
+    "The agent emailed my supplier in my name" is the single most common reason
+    a buyer refuses to switch a tool like this on. Autonomy is therefore a
+    property of the conversation, not a global setting: chase a freight
+    forwarder automatically, hand-hold the relationship that matters.
+    """
     sup = await conn.fetchrow(
         "select coalesce(legal_name, name) as name, email from suppliers where id=$1",
         supplier_id)
@@ -110,23 +125,146 @@ async def agent_message_supplier(conn, *, incident_id: str, supplier_id: str,
         conn, incident_id=incident_id, counterparty_type="supplier",
         counterparty_id=supplier_id, counterparty_name=name, subject=subject)
 
+    autonomy = await conn.fetchval(
+        "select autonomy from message_threads where id=$1", thread_id) or "autonomous"
+
     body, used_llm = await llm.draft_supplier_message(kind, context)
+
+    # --- hands off ------------------------------------------------------------
+    if autonomy == "human":
+        await emit(conn, incident_id=incident_id, actor="agent",
+                   event_type="MESSAGE_SUPPRESSED",
+                   human_summary=(f"Did not write to {name} — this conversation is "
+                                  f"marked for human handling. What I would have asked: "
+                                  f"{body.splitlines()[0][:120]}"),
+                   payload={"thread_id": thread_id, "supplier_id": supplier_id,
+                            "autonomy": autonomy, "would_have_written": body})
+        return thread_id
+
+    # --- draft and wait -------------------------------------------------------
+    if autonomy == "draft":
+        await post(conn, thread_id=thread_id, direction="outbound", author_type="agent",
+                   author_name="DisruptionOps Agent", body=body, incident_id=incident_id,
+                   delivery_state="draft", to_name=name)
+        await conn.execute(
+            "update message_threads set needs_reply=true, last_activity_at=now() where id=$1",
+            thread_id)
+        await emit(conn, incident_id=incident_id, actor="agent",
+                   event_type="MESSAGE_DRAFTED",
+                   human_summary=f"Drafted a message to {name} and stopped. "
+                                 f"It will not send until you press send.",
+                   payload={"thread_id": thread_id, "supplier_id": supplier_id})
+        await broadcast_state("draft_waiting", {"thread_id": thread_id})
+        return thread_id
+
+    # --- act ------------------------------------------------------------------
     await post(conn, thread_id=thread_id, direction="outbound", author_type="agent",
                author_name="DisruptionOps Agent", body=body, incident_id=incident_id,
                delivery_state="awaiting_response", to_name=name)
-    await conn.execute("update message_threads set status='awaiting_reply' where id=$1",
-                       thread_id)
+    await conn.execute(
+        """update message_threads set status='awaiting_reply', last_activity_at=now()
+            where id=$1""", thread_id)
 
-    # Counterparty replies later, on the simulated clock.
+    # Counterparty replies later, on the simulated clock — unless a person has
+    # taken that desk, in which case we genuinely wait for them.
     asyncio.create_task(_supplier_reply(thread_id, supplier_id, name, incident_id))
     return thread_id
 
 
+async def send_draft(conn, message_id: int, *, edited_body: str | None = None,
+                     sent_by: str = "operator") -> dict:
+    """Release a held draft. This is the human pressing send."""
+    msg = await conn.fetchrow("select * from thread_messages where id=$1", message_id)
+    if msg is None:
+        raise ValueError(f"unknown message {message_id}")
+    if msg["delivery_state"] != "draft":
+        raise ValueError(f"message {message_id} is not a draft")
+
+    body = (edited_body or msg["body"]).strip()
+    thread = await conn.fetchrow(
+        "select * from message_threads where id=$1", msg["thread_id"])
+
+    await conn.execute(
+        """update thread_messages set body=$2, delivery_state='awaiting_response'
+            where id=$1""", message_id, body)
+    await conn.execute(
+        """update message_threads set status='awaiting_reply', needs_reply=false,
+               last_activity_at=now() where id=$1""", msg["thread_id"])
+
+    await emit(conn, incident_id=thread["incident_id"], actor=sent_by,
+               event_type="DRAFT_SENT",
+               human_summary=(f"{sent_by} sent the agent's draft to "
+                              f"{thread['counterparty_name']}"
+                              + (" (edited)." if edited_body and
+                                 edited_body.strip() != msg["body"].strip() else ".")),
+               payload={"thread_id": msg["thread_id"], "message_id": message_id,
+                        "edited": bool(edited_body and
+                                       edited_body.strip() != msg["body"].strip())})
+    await broadcast_state("message", {"thread_id": msg["thread_id"]})
+
+    if thread["counterparty_type"] == "supplier" and thread["counterparty_id"]:
+        asyncio.create_task(_supplier_reply(
+            msg["thread_id"], thread["counterparty_id"],
+            thread["counterparty_name"], thread["incident_id"]))
+    return {"ok": True, "message_id": message_id, "thread_id": msg["thread_id"]}
+
+
+async def set_autonomy(conn, thread_id: int, mode: str, *, by: str = "operator") -> dict:
+    if mode not in ("autonomous", "draft", "human"):
+        raise ValueError("mode must be autonomous, draft or human")
+    row = await conn.fetchrow("select * from message_threads where id=$1", thread_id)
+    if row is None:
+        raise ValueError(f"unknown thread {thread_id}")
+    await conn.execute("update message_threads set autonomy=$2 where id=$1", thread_id, mode)
+    said = {"autonomous": "the agent may write and send on this thread by itself",
+            "draft": "the agent will write here but nothing sends until you release it",
+            "human": "the agent will not write on this thread at all"}[mode]
+    await emit(conn, incident_id=row["incident_id"], actor=by,
+               event_type="THREAD_AUTONOMY_CHANGED",
+               human_summary=f"{row['counterparty_name']} — {said}.",
+               payload={"thread_id": thread_id, "autonomy": mode, "by": by})
+    await broadcast_state("thread_autonomy", {"thread_id": thread_id, "autonomy": mode})
+    return {"ok": True, "thread_id": thread_id, "autonomy": mode}
+
+
 async def _supplier_reply(thread_id: int, supplier_id: str, name: str,
                           incident_id: str | None) -> None:
+    """The scripted counterparty answers — unless a person is at their desk.
+
+    Presence beats the script. A scripted liar proves nothing about an agent:
+    the interesting version is a human at `/supplier/SUP-21` deciding, live,
+    whether to tell the truth. So while somebody is sitting at that portal the
+    persona stands down entirely and the agent genuinely waits for them. Close
+    the tab and the personas resume, so an unattended demo still runs end to end.
+    """
+    from . import supplier_portal               # local import: avoids a cycle
+
     persona = PERSONAS.get(supplier_id, DEFAULT_PERSONA)
     # Simulated hours → real seconds via the clock rate.
     await asyncio.sleep(max(0.6, persona["reply_delay_h"] * CLOCK.seconds_per_sim_hour))
+
+    if supplier_portal.present(supplier_id):
+        try:
+            pool = await db()
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "update message_threads set status='awaiting_reply' where id=$1",
+                    thread_id)
+                await emit(conn, incident_id=incident_id, actor="agent",
+                           event_type="AWAITING_COUNTERPARTY",
+                           human_summary=(
+                               f"Waiting on {name}. Somebody is at their portal, so this "
+                               f"is a real answer from a real person — I am not going to "
+                               f"invent one, and I am not going to plan as though it "
+                               f"already arrived."),
+                           payload={"thread_id": thread_id, "supplier_id": supplier_id,
+                                    "staffed": True})
+                await broadcast_state("awaiting_counterparty",
+                                      {"thread_id": thread_id, "supplier_id": supplier_id})
+        except Exception:                       # noqa: BLE001
+            pass
+        return
+
     try:
         pool = await db()
         async with pool.acquire() as conn:
@@ -156,18 +294,30 @@ async def _supplier_reply(thread_id: int, supplier_id: str, name: str,
                                 "message": persona["script"]})
 
             # An offer we cannot act on is a decision for a person, not a guess.
+            # It goes into the queue as a row with a status, because a question
+            # emitted only into a log file is the agent talking to itself.
             if interp["needs_human"]:
-                await emit(conn, incident_id=incident_id, actor="agent",
-                           event_type="HUMAN_INPUT_REQUIRED",
-                           human_summary=(f"{name}\u2019s reply needs a person: "
-                                          f"{interp['needs_human_reason']}"),
-                           payload={"supplier_id": supplier_id, "supplier_name": name,
-                                    "message": persona["script"],
-                                    "interpretation": interp,
-                                    "confidence": interp["confidence"],
-                                    "options": ["ask for confirmation",
-                                                "reply manually",
-                                                "use another supplier"]})
+                await supplier_portal.raise_human_input(
+                    conn, kind="ambiguous_reply", incident_id=incident_id,
+                    thread_id=thread_id, supplier_id=supplier_id,
+                    question=f"{name}\u2019s reply cannot be acted on as written.",
+                    detail=interp["needs_human_reason"],
+                    confidence=interp["confidence"],
+                    context={"message": persona["script"], "interpretation": interp,
+                             "supplier_name": name},
+                    options=[
+                        {"id": "chase", "label": "Ask them to commit",
+                         "detail": "Send a follow-up asking for a firm quantity, price "
+                                   "and despatch date.",
+                         "effect": "One more message on this thread; the agent waits."},
+                        {"id": "takeover", "label": "I will reply myself",
+                         "detail": "Hand this thread to a human. The agent stops "
+                                   "writing here.",
+                         "effect": "Thread autonomy becomes human."},
+                        {"id": "exclude", "label": "Source elsewhere",
+                         "detail": f"Drop {name} from this recovery and replan.",
+                         "effect": "A constraint for this incident; the plan re-forms."},
+                    ])
     except Exception:                              # noqa: BLE001
         pass
 
@@ -278,14 +428,42 @@ async def carrier_update(conn, *, po_id: str, status: str, note: str | None = No
 
 
 async def threads_for(conn, incident_id: str | None = None) -> list[dict]:
+    """Threads plus the three facts the inbox is sorted on.
+
+    `needs_you` is the whole point of the Communications screen: an inbox that
+    only shows conversations makes you read all of them to find the two that are
+    stuck. A thread needs you when a draft is waiting to be released, when the
+    agent has been told to keep its hands off, or when there is an unanswered
+    question attached to it.
+    """
+    from . import supplier_portal               # local import: avoids a cycle
+
     if incident_id:
         rows = await conn.fetch(
             "select * from message_threads where incident_id=$1 order by id", incident_id)
     else:
-        rows = await conn.fetch("select * from message_threads order by id desc limit 30")
+        rows = await conn.fetch("select * from message_threads order by id desc limit 40")
+
+    pending = {r["thread_id"] for r in await conn.fetch(
+        "select distinct thread_id from human_input_requests where status='open'")
+        if r["thread_id"] is not None}
+
     out = []
     for t in rows:
-        msgs = await conn.fetch(
-            "select * from thread_messages where thread_id=$1 order by id", t["id"])
-        out.append({**dict(t), "messages": [dict(m) for m in msgs]})
+        msgs = [dict(m) for m in await conn.fetch(
+            "select * from thread_messages where thread_id=$1 order by id", t["id"])]
+        drafts = [m for m in msgs if m["delivery_state"] == "draft"]
+        last = msgs[-1] if msgs else None
+        staffed = (t["counterparty_type"] == "supplier" and t["counterparty_id"]
+                   and supplier_portal.present(t["counterparty_id"]))
+        out.append({
+            **dict(t),
+            "messages": msgs,
+            "drafts": len(drafts),
+            "last_message": last,
+            "has_contradiction": any(m["is_contradiction"] for m in msgs),
+            "open_question": t["id"] in pending,
+            "counterparty_staffed": bool(staffed),
+            "needs_you": bool(drafts) or t["id"] in pending or t["autonomy"] == "human",
+        })
     return out

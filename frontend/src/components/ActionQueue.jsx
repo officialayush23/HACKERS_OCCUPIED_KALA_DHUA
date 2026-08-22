@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'motion/react'
 import {
-  CheckCircle2, ClipboardCheck, Clock3, IndianRupee, MessageSquare, TriangleAlert,
+  CheckCircle2, CircleHelp, ClipboardCheck, Clock3, FileText, IndianRupee,
+  MessageSquare, TriangleAlert,
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { inr } from '@/lib/format'
@@ -20,15 +21,23 @@ import { ScrollArea } from '@/components/ui/scroll-area'
  * what to do, and shrinks as you do it.
  */
 const KIND = {
-  approval:  { icon: TriangleAlert,  label: 'Needs your decision', tone: 'danger' },
-  warehouse: { icon: ClipboardCheck, label: 'Warehouse action',    tone: 'warn' },
-  waiting:   { icon: MessageSquare,  label: 'Waiting on a reply',  tone: 'muted' },
+  approval:  { icon: TriangleAlert,  label: 'Needs your decision',   tone: 'danger' },
+  question:  { icon: CircleHelp,     label: 'It would not guess',    tone: 'danger' },
+  draft:     { icon: FileText,       label: 'Written, not sent',     tone: 'info' },
+  warehouse: { icon: ClipboardCheck, label: 'Warehouse action',      tone: 'warn' },
+  waiting:   { icon: MessageSquare,  label: 'Waiting on a reply',    tone: 'muted' },
 }
 
 const TONE = {
   danger: 'border-danger/45 bg-danger/[0.07]',
   warn:   'border-warn/40 bg-warn/[0.06]',
+  info:   'border-info/45 bg-info/[0.06]',
   muted:  '',
+}
+
+const ICON_TONE = {
+  danger: 'text-danger', warn: 'text-warn', info: 'text-info',
+  muted: 'text-muted-foreground',
 }
 
 function Row({ item, onOpen, index }) {
@@ -42,15 +51,18 @@ function Row({ item, onOpen, index }) {
       className={`rounded-xl border p-4 ${TONE[meta.tone]}`}>
 
       <div className="flex items-center gap-2.5">
-        <Icon className={`size-4 shrink-0 ${
-          meta.tone === 'danger' ? 'text-danger'
-          : meta.tone === 'warn' ? 'text-warn' : 'text-muted-foreground'}`} />
+        <Icon className={`size-4 shrink-0 ${ICON_TONE[meta.tone] ?? 'text-muted-foreground'}`} />
         <span className="text-muted-foreground text-[10px] font-medium tracking-[0.14em] uppercase">
           {meta.label}
         </span>
         {item.cost > 0 && (
           <Badge variant="outline" className="ml-auto shrink-0 gap-1 font-mono text-[10.5px]">
             <IndianRupee className="size-2.5" />{inr(item.cost).replace('₹', '')}
+          </Badge>
+        )}
+        {item.kind === 'question' && item.confidence != null && (
+          <Badge variant="outline" className="ml-auto shrink-0 font-mono text-[10px]">
+            confidence {Number(item.confidence).toFixed(2)}
           </Badge>
         )}
       </div>
@@ -76,8 +88,9 @@ export default function ActionQueue({ onGoto }) {
 
   const open = (item) => {
     if (item.kind === 'approval') onGoto('approvals')
+    else if (item.kind === 'question') onGoto('questions')
     else if (item.kind === 'warehouse') onGoto('warehouse')
-    else onGoto('comms')
+    else onGoto('comms')      // drafts and waiting replies both live in the inbox
   }
 
   return (

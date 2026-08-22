@@ -43,6 +43,7 @@ psql "$DATABASE_URL" -f supabase/migrations/0004_geo_coords_for_network_view.sql
 psql "$DATABASE_URL" -f supabase/migrations/0005_business_naming_and_closed_loops.sql
 psql "$DATABASE_URL" -f supabase/migrations/0006_production_reschedule_loop.sql
 psql "$DATABASE_URL" -f supabase/migrations/0007_supplier_learning_loop.sql
+psql "$DATABASE_URL" -f supabase/migrations/0008_supplier_portal_autonomy_and_human_input.sql
 psql "$DATABASE_URL" -f supabase/seed.sql
 ```
 
@@ -95,26 +96,52 @@ Open the dashboard and click **Run simulation** in the top bar.
 The drawer shows every built-in scenario, **what it feeds in and when**, in plain language.
 Pick one and press Run. One real second is one simulated hour.
 
-### Two windows — the demo that matters
+### Three windows — the demo that matters
 
-The agent does not "get" a stock figure because the demo hands it one. It has to ask a
-**different human at a different screen**, and wait.
+The agent does not "get" a stock figure, or a supplier's price, because the demo hands
+it one. It has to ask a **different human at a different screen**, and wait.
 
 | Window | URL | Who |
 |---|---|---|
 | Operations | `http://localhost:5173/` | The supply-chain manager |
 | Warehouse | `http://localhost:5173/warehouse` | The floor at Pune Plant |
+| Supplier | `http://localhost:5173/supplier/SUP-21` | A vendor, answering in their own words |
 
-Open both side by side. Run a scenario in the first; a task appears in the second within a
-second, over the same WebSocket. Type a count that contradicts the ERP, press **Send to the
-agent**, and watch the plan change in the first window.
+Open them side by side. Nothing is piped between tabs — every one of these goes through
+the database and the agent, which is the only reason the loops are testable rather than
+asserted.
 
-The warehouse portal is deliberately plainer — one question: what do I need to do right now.
-No scores, no supplier risk, no audit trail.
+**Warehouse.** Run a scenario in the first window; a task appears in the second within a
+second, over the same WebSocket. Type a count that contradicts the ERP, press **Send to
+the agent**, and watch the plan change. The agent never writes warehouse truth: it raises
+a task, a human answers, the answer becomes evidence, the world updates, the agent
+observes. An agent that could set `usable_stock` itself would only be pretending to
+verify anything.
 
-**The agent never writes warehouse truth.** It raises a task, a human answers, the answer
-becomes evidence, the world updates, the agent observes. An agent that could set
-`usable_stock` itself would only be pretending to verify anything.
+**Supplier.** This is the harder half, and the one that used to be a lie of omission.
+"The supplier claims dispatch and the agent catches it" was a persona firing a hardcoded
+string at a timer — a scripted liar proves nothing about an agent, and a judge had no way
+to disagree with it. Now *you* decide whether to tell the truth:
+
+- **Quote** — quantity, price, lead time, mode, MOQ, certifications. An applied quote is
+  written through to `supplier_catalog`, which is what the solver reads, so dropping your
+  price moves the recommendation on the operations screen while you watch.
+- **Hedge** — "we may be able to arrange around 500 units, subject to confirmation".
+  Numbers present, commitment absent. The agent parses it, refuses to treat it as supply,
+  and raises a question rather than guessing.
+- **Decline** — an honest no removes you from the pool instead of leaving the solver
+  costing an option that does not exist.
+- **Claim a dispatch** — including one that never happened. The carrier system is not
+  yours to edit, so the contradiction is real and the agent finds it by checking rather
+  than by being told.
+
+**While a supplier portal is open, that supplier's scripted persona stands down** and the
+agent genuinely waits for a person. Close the tab and the personas resume, so an
+unattended demo still runs end to end. Certifications you assert at the portal are
+recorded as a *claim* and never written to the certification file — a certification is a
+document, not a sentence in an email, and the agent says so.
+
+`/supplier` on its own lists everyone, with whoever is waiting on a reply at the top.
 
 ### The simulated clock
 
@@ -123,7 +150,7 @@ something is happening; the clock is frozen otherwise. This matters — a free-r
 silently ages the world while the dashboard sits open, and after fifteen idle minutes every
 seeded delivery date is a simulated month in the past and every ETA reads negative.
 
-### The seven built-in scenarios
+### The eight built-in scenarios
 
 | Scenario | What it tests |
 |---|---|
@@ -134,10 +161,29 @@ seeded delivery date is a simulated month in the past and every ETA reads negati
 | **S5 Recovery exceeds ₹150,000** | Does it stop and ask, or spend? |
 | **S6 Line stops in 12 hours** | Does it still act when nothing arrives in time? |
 | **S7 Chaos** | Several of the above at once |
+| **S8 Ambiguous supplier** | Does it guess at a hedged offer, or ask? |
 
-### Write your own test case
+Pick any one and the drawer tells you **why that test exists** and **what to watch for**,
+before you run it — so you are not looking at a stream of events wondering which of them
+was the point.
 
-**Run simulation → Write your own.** Paste a list of events as JSON:
+### Write your own test case — the builder
+
+**Run simulation → Builder.** No IDs. Pick a part and every dropdown below narrows to
+that part; pick a shipment and it shows you whose it is, locked, because a scenario naming
+a supplier who has nothing to do with that order is a typo rather than a test. Fields come
+from the backend's own event schema, so the form, the validator and the reference panel
+cannot drift apart.
+
+Build the timeline event by event, **Validate** (which checks the shape *and* that every
+ID names a row that actually exists), then **Run this test**.
+
+**+ New supplier** lets you build your own trap without touching our seed file — "the
+cheapest supplier has no AEC-Q100" should take thirty seconds. Anything you create is
+flagged as a test entity and disappears on the next reset, so one person's experiment
+cannot contaminate the next person's run.
+
+### Write your own test case — JSON
 
 ```json
 [
@@ -158,9 +204,16 @@ registered into the same registry the built-ins live in, so they run down the **
 code path — there is no separate "custom" mode that could behave differently from the one we
 demo. They live in memory only and disappear on restart.
 
-The ten event types: `supplier_delay`, `inventory_correction`, `supplier_claim`,
-`tracking_state`, `demand_spike`, `priority_change`, `deadline_pull_in`, `quality_failure`,
-`expedite_unavailable`, `hazmat_disruption`.
+The twelve event types: `supplier_delay`, `inventory_correction`, `supplier_claim`,
+`tracking_state`, `supplier_reply`, `warehouse_reply`, `demand_spike`, `priority_change`,
+`deadline_pull_in`, `quality_failure`, `expedite_unavailable`, `hazmat_disruption`.
+
+`supplier_reply` and `warehouse_reply` are the two that make adversarial cases writable:
+they inject prose down the *same* path a human at a portal uses, so a script and a person
+at a keyboard are indistinguishable to the agent.
+
+The JSON tab carries a schema reference beside the editor — required and optional fields
+per event type, and the real IDs, click to copy.
 
 Also available over the API:
 
@@ -180,8 +233,13 @@ Validation names the offending event and says what was expected, rather than ret
 several are deliberate traps. Edit it, re-run it, and the whole world changes: your suppliers,
 your components, your certifications, your production orders.
 
-**Reset** in the simulation drawer re-seeds operational state. The audit log and past run
-scores deliberately survive it, so you never lose the comparison you were tuning against.
+**Reset** in the simulation drawer re-seeds operational state — inventory, orders,
+shipments, conversations, open questions, warehouse tasks, and anything you created in the
+builder. The audit log and past run scores deliberately survive it, so you never lose the
+comparison you were tuning against.
+
+**Hard** takes those too: run history and the audit trail included. It asks first. Use it
+between dev sessions, never mid-demo.
 
 ---
 
@@ -202,7 +260,33 @@ found; the form says what that will change *before* they submit it.
 This closes a loop most systems leave open: the agent will not act on a stock figure it has not
 had confirmed by a human on the floor.
 
-### 3. Decision Explorer — why, and why not
+### 3. Decisions → The brief — evidence, then everything after it
+
+The Decision Explorer answers *what did the solver pick and what did it refuse*. That is a
+comparison, and it is the right screen for a procurement analyst. It is the wrong screen
+for the person who has to sign, who asks a different five questions in a fixed order:
+
+```
+What do we know, and how do we know it?        EVIDENCE
+So what is true about this situation?           CONCLUSION
+What is being done?                             ACTION
+Why that and not something else?                WHY
+How sure are you, what would change it?         CONFIDENCE
+```
+
+Every evidence row names **what it was checked against**, and carries a verdict —
+corroborated, contradicted, single-source, not-a-commitment, unanswered. A figure nobody
+has corroborated is marked as such, because a stock number no one has laid eyes on is
+genuinely worth less than one a human counted.
+
+**Confidence is arithmetic, not a mood.** It starts at 1.00 and every unverified,
+contradicted or hedged piece of evidence subtracts a published amount. The subtractions
+are listed under the number, so it can be reconstructed by hand — and argued with.
+
+Nothing on this screen is generated by a language model. A brief whose reasoning was
+written after the decision is a rationalisation, and an auditor can tell.
+
+### 4. Decisions → Every option — why, and why not
 
 Leads with the recommendation and the reasons for it. **The refusals are first-class** — the
 two cheapest suppliers in the catalogue are ₹108 and ₹120, the chosen one is ₹145, and the
@@ -215,25 +299,57 @@ and it says *Do nothing — the line stops*, which is the honest answer.
 Behind *View the scoring model* is the full matrix: every option scored on continuity, cost and
 supplier risk using the rubric's own weights.
 
-### 4. Decision Log — every discrepancy, and what was done about it
+### 5. Decision Log — every discrepancy, and what was done about it
 
 Each discrepancy is a case answering four questions above the fold: what was found, what the
 agent did, what it refused, and what it asked of you. Three lenses — **Business / Agent /
 Technical** — over the same immutable record. Nobody gets different facts, only more detail.
 
-### 5. Network — where the problem is
+### 6. Network — where the problem is
 
 Schematic by default (instant, no tiles, works on conference wifi). **Geography** toggles to a
 Mapbox view. Hover any supplier on either and you get its trust score, its delivery record,
 **why the score last moved**, and the last five things the agent actually did with them.
 
-### 6. Approvals — the authority boundary
+### 7. Conversations — an inbox, and who is allowed to write
+
+Tabs, because showing every thread equally means reading all of them to find the two that
+are stuck. **Needs reply** collects the threads where a draft is held, a question is
+attached, or the agent has been told to keep its hands off.
+
+Each thread has an **autonomy** setting, and this is the feature buyers actually ask for:
+
+| Mode | What happens |
+|---|---|
+| **Autonomous** | It writes and sends by itself |
+| **Draft only** | It writes; nothing leaves until you release it — you can edit first, and your edit is recorded as yours |
+| **I have this** | It stops writing on that thread entirely, and logs what it *would* have asked |
+
+"The agent emailed my supplier in my name" is the single most common reason a buyer
+refuses to switch a tool like this on. Autonomy is therefore a property of the
+conversation, not a global switch: chase a freight forwarder automatically, hand-hold the
+relationship that matters.
+
+### 8. Its Questions — what it would not guess at
+
+Distinct from approvals, and the distinction is the interesting one. An approval is a
+decision the agent **already made** and may not execute. These are decisions it **declined
+to make**, because the evidence would not carry them.
+
+Each carries the agent's own confidence, the message that caused it, and options that each
+*do* something — chase for a firm commitment, take the thread over, or drop that supplier
+and replan. The effect is printed on the button before you press it.
+
+This is what stops an agent reading "we may be able to arrange around 500 units" as 500
+units of supply and then spending money against it.
+
+### 9. Approvals — the authority boundary
 
 Only what crosses the agent's authority reaches a human. Approve, reject, or **modify** — a
 modification becomes a permanent constraint the agent respects from then on ("never use this
 supplier again").
 
-### 7. ⌘K — ask anything
+### 10. ⌘K — ask anything
 
 *"Why did you choose that supplier?"* · *"What happens if PO-7712 slips another two days?"*
 Answered from live operational state, and it shows what it grounded the answer in.

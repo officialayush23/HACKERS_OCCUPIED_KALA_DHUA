@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'motion/react'
 import {
-  AlertTriangle, Check, FlaskConical, Loader2, Play, Plus, RotateCcw,
+  AlertTriangle, Check, FlaskConical, Loader2, Play, Plus, RotateCcw, Trash2,
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { refresh } from '@/lib/refresh'
@@ -131,6 +131,13 @@ export default function SimulationDrawer({ open, onOpenChange }) {
 
   const run = useMutation({ mutationFn: api.inject, onSuccess: done, onError: fail })
   const reset = useMutation({ mutationFn: api.reset, onSuccess: done, onError: fail })
+  // A clean backend behind a stale React cache still shows ghosts, so the hard
+  // reset clears both.
+  const wipe = useMutation({
+    mutationFn: api.hardReset,
+    onSuccess: () => { setError(null); qc.clear(); refresh(qc, 'simulation') },
+    onError: fail,
+  })
 
   const scenarios = data?.scenarios ?? []
   const running = data?.running ?? []
@@ -261,23 +268,53 @@ export default function SimulationDrawer({ open, onOpenChange }) {
           </TabsContent>
         </Tabs>
 
-        {/* the only two things you can do here */}
-        <div className="flex items-center gap-3 border-t px-7 py-5">
+        {/* three things, and each says exactly what it destroys */}
+        <div className="flex flex-col gap-3 border-t px-7 py-5">
           <Button size="lg" disabled={!selected || run.isPending}
                   onClick={() => selected && run.mutate(selected.id)}
-                  className="h-10 flex-1">
+                  className="h-11">
             {run.isPending ? <Loader2 className="size-4 animate-spin" />
                            : <Play className="size-4" />}
             Run{selTitle ? ` \u201c${selTitle}\u201d` : ''}
           </Button>
 
-          <Button variant="outline" size="lg" disabled={reset.isPending}
-                  onClick={() => reset.mutate('demo')} className="h-10"
-                  title="Re-seed the world. Run history is kept.">
-            {reset.isPending ? <Loader2 className="size-4 animate-spin" />
-                             : <RotateCcw className="size-4" />}
-            Reset world
-          </Button>
+          <div className="flex items-center gap-3">
+            <Button variant="outline" size="lg" disabled={reset.isPending}
+                    onClick={() => reset.mutate('demo')} className="h-10 flex-1">
+              {reset.isPending ? <Loader2 className="size-4 animate-spin" />
+                               : <RotateCcw className="size-4" />}
+              Reset world
+            </Button>
+
+            <Button variant="outline" size="lg" disabled={wipe.isPending}
+                    onClick={() => wipe.mutate()}
+                    className="border-danger/40 text-danger hover:bg-danger/10 h-10 flex-1">
+              {wipe.isPending ? <Loader2 className="size-4 animate-spin" />
+                              : <Trash2 className="size-4" />}
+              Wipe everything
+            </Button>
+          </div>
+
+          {wipe.isSuccess && (
+            <div className="border-ok/40 bg-ok/[0.07] rounded-lg border px-3 py-2
+                            text-[12px] leading-relaxed">
+              Everything cleared. No run, no incidents, no decisions, no logs, no score.
+            </div>
+          )}
+        </div>
+
+        <div className="text-muted-foreground/70 grid grid-cols-2 gap-x-5 gap-y-1
+                        px-7 pb-6 text-[11px] leading-relaxed">
+          <div>
+            <b className="text-muted-foreground">Reset world</b> — re-seeds inventory,
+            orders and shipments. Past runs and their scores survive, so you keep the
+            comparison you were tuning against.
+          </div>
+          <div>
+            <b className="text-danger/80">Wipe everything</b> — deletes every run,
+            incident, decision, message, task, approval and score. Only the baseline
+            world survives: suppliers, components, plants and policies.
+          </div>
         </div>
 
         <p className="text-muted-foreground/70 px-7 pb-5 text-[11px] leading-relaxed">

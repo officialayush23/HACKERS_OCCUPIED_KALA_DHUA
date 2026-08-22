@@ -45,8 +45,10 @@ export default function NowBar({ onGoto }) {
   const { data } = useQuery({ queryKey: ['now'], queryFn: api.now, refetchInterval: 3000 })
 
   const queue = data?.queue ?? []
-  const needsHuman = queue.filter((q) => q.kind === 'approval')
-  const waitingOn = queue.filter((q) => q.kind !== 'approval')
+  // A question the agent declined to answer is as blocking as an approval — it
+  // is already waiting on you, and it is planning without the thing it asked for.
+  const needsHuman = queue.filter((q) => ['approval', 'question'].includes(q.kind))
+  const waitingOn = queue.filter((q) => !['approval', 'question'].includes(q.kind))
   const incidents = data?.incidents ?? []
   const critical = incidents.filter((i) => i.severity === 'critical').length
   const cover = data?.min_coverage_days
@@ -65,7 +67,8 @@ export default function NowBar({ onGoto }) {
         <Item icon={TriangleAlert} tone="text-danger" pulse
               value={`${needsHuman.length} decision${needsHuman.length > 1 ? 's' : ''} waiting on you`}
               sub={needsHuman[0].title}
-              onClick={() => onGoto('approvals')} />
+              onClick={() => onGoto(
+                needsHuman[0].kind === 'question' ? 'questions' : 'approvals')} />
       ) : (
         <Item icon={CheckCircle2} tone="text-ok"
               value="Nothing waiting on you"

@@ -11,7 +11,7 @@ import json
 from datetime import timedelta
 from typing import Any
 
-from . import learning
+from . import comms, learning
 from .core import (CLOCK, broadcast_state, db, emit, next_incident_id,
                     run_context, set_run_context)
 from .scenarios import SCENARIOS
@@ -35,12 +35,13 @@ async def _ensure_incident(conn, *, itype: str, component_id: str | None,
     iid = await next_incident_id(conn)
     await conn.execute(
         """insert into incidents (id, type, severity, status, component_id,
-                                  source_po_id, thread_id, details)
-           values ($1,$2,$3::severity_level,'open',$4,$5,$1,$6::jsonb)""",
+                                  source_po_id, thread_id, details, scenario_run_id)
+           values ($1,$2,$3::severity_level,'open',$4,$5,$1,$6::jsonb,$7)""",
         iid, itype, severity, component_id, po_id,
         json.dumps({**(details or {}),
                     "scenario_run_id": (run_context() or {}).get("run_id"),
                     "source": "scenario_engine"}, default=str),
+        (run_context() or {}).get("run_id"),
     )
     await emit(conn, incident_id=iid, actor="injector", event_type="INCIDENT_OPENED",
                human_summary=f"Incident {iid} opened: {itype}.",
@@ -124,7 +125,11 @@ async def apply_event(conn, etype: str, params: dict[str, Any],
 
     if etype == "supplier_claim":
         po_id, claim = params["po_id"], params.get("claim", "dispatched")
-        sup = await conn.fetchval("select supplier_id from purchase_orders where id=$1", po_id)
+        po = await conn.fetchrow(
+            "select supplier_id, component_id from purchase_orders where id=$1", po_id)
+        if po is None:
+            raise ValueError(f"unknown po_id {po_id}")
+        sup = po["supplier_id"]
         await conn.execute(
             """insert into shipment_tracking (po_id, supplier_claim, updated_at)
                values ($1,$2,now())
@@ -136,11 +141,92 @@ async def apply_event(conn, etype: str, params: dict[str, Any],
             incident_id, sup, f"Update on {po_id}",
             params.get("body", f"Shipment for {po_id} has been {claim}."))
         iid = incident_id or await _ensure_incident(
-            conn, itype="supplier_claim", component_id=None, po_id=po_id)
+            conn, itype="supplier_claim", component_id=po["component_id"], po_id=po_id)
         summary = f"{sup} claims {po_id} is '{claim}'."
         await emit(conn, incident_id=iid, actor="injector",
                    event_type="SUPPLIER_CLAIM", human_summary=summary,
                    payload={"po_id": po_id, "supplier_id": sup, "claim": claim})
+
+        # The claim may arrive AFTER the carrier data, not before it. Only the
+        # tracking_state branch used to compare the two, so a lie told second
+        # went straight through — which is exactly the order a supplier at the
+        # portal will do it in. The check belongs on both sides of the join.
+        track = await conn.fetchrow(
+            "select supplier_claim, tracking_status from shipment_tracking where po_id=$1",
+            po_id)
+        if (claim in ("dispatched", "in_transit")
+                and track and track["tracking_status"] in ("label_created_no_pickup",
+                                                           "not_shipped")):
+            await learning.record(
+                conn, sup, "contradiction", incident_id=iid,
+                reason=f"Claimed '{claim}' on {po_id} while the carrier showed "
+                       f"'{track['tracking_status']}'.",
+                detail={"po_id": po_id})
+            csum = (f"CONTRADICTION on {po_id}: supplier claims '{claim}' but carrier "
+                    f"shows '{track['tracking_status']}'.")
+            await emit(conn, incident_id=iid, actor="agent",
+                       event_type="CLAIM_CONTRADICTED", human_summary=csum,
+                       payload={"po_id": po_id, "supplier_id": sup,
+                                "supplier_claim": claim,
+                                "tracking_status": track["tracking_status"],
+                                "detected_on": "claim"})
+            await _react(conn, po["component_id"],
+                         "supplier claim contradicted by carrier", po_id)
+            return {"incident_id": iid, "summary": csum}
+
+        await _react(conn, po["component_id"], f"supplier claim on {po_id}", po_id)
+        return {"incident_id": iid, "summary": summary}
+
+    if etype == "supplier_reply":
+        # A free-text answer from a supplier, injected rather than typed at the
+        # portal. Same code path as the portal so an adversarial script and a
+        # human at a keyboard are indistinguishable to the agent.
+        from . import supplier_portal
+        sid = params["supplier_id"]
+        text = params.get("message") or params.get("body") or ""
+        if not text.strip():
+            raise ValueError("supplier_reply needs a message")
+        out = await supplier_portal.reply(
+            conn, sid, thread_id=params.get("thread_id"), kind="freeform", body=text)
+        summary = f"{sid} replied: {text.splitlines()[0][:110]}"
+        return {"incident_id": out.get("incident_id") or incident_id, "summary": summary}
+
+    if etype == "warehouse_reply":
+        # The floor answering a count, injected. Completes the open task if there
+        # is one so the loop closes the same way it does when a person types it.
+        cid = params["component_id"]
+        usable = int(params["usable_stock"])
+        held = int(params.get("quarantined_stock", 0))
+        task_id = await conn.fetchval(
+            """select id from warehouse_tasks
+                where component_id=$1 and status in ('open','in_progress')
+                order by id limit 1""", cid)
+        if task_id:
+            out = await comms.warehouse_complete_task(
+                conn, task_id, {"usable_stock": usable, "quarantined_stock": held,
+                                "reason": params.get("message") or "Injected physical count"})
+            iid = out.get("incident_id") or incident_id
+        else:
+            prev = await conn.fetchrow(
+                "select erp_stock, usable_stock from inventory where component_id=$1", cid)
+            if prev is None:
+                raise ValueError(f"unknown component_id {cid}")
+            await conn.execute(
+                """update inventory set usable_stock=$2, quarantined_stock=$3,
+                       last_updated=now() where component_id=$1""", cid, usable, held)
+            iid = incident_id or await _ensure_incident(
+                conn, itype="inventory_discrepancy", component_id=cid, po_id=None,
+                severity="high")
+            await emit(conn, incident_id=iid, actor="warehouse",
+                       event_type="PHYSICAL_COUNT_CONFIRMED",
+                       human_summary=(f"Warehouse reports {usable} usable units of {cid}"
+                                      + (f", {held} in quality hold." if held else ".")),
+                       payload={"component_id": cid, "usable_stock": usable,
+                                "quarantined_stock": held,
+                                "erp_stock": prev["erp_stock"],
+                                "message": params.get("message")})
+        summary = f"Warehouse counted {usable} usable units of {cid}."
+        await _react(conn, cid, "warehouse physical count")
         return {"incident_id": iid, "summary": summary}
 
     if etype == "tracking_state":
@@ -338,6 +424,11 @@ async def inject(scenario_id: str) -> dict[str, Any]:
                    human_summary=f"Scenario {scenario_id} injected: "
                                  f"{SCENARIOS[scenario_id]['title']}",
                    payload={"scenario_id": scenario_id, "run_id": run_id})
+        # This run is now what the dashboard shows. Everything it creates is
+        # stamped with it, and everything the UI reads is scoped to it.
+        await conn.execute(
+            "update active_run set scenario_run_id=$1, updated_at=now() where id", run_id)
+
     CLOCK.start()                      # time only passes while something happens
     _running[scenario_id] = asyncio.create_task(_run(scenario_id, run_id))
     await broadcast_state("scenario_started",

@@ -429,11 +429,32 @@ async def solve_for_production_order(
     if need is None:
         raise ValueError(f"unknown production order {production_order_id}")
 
+    # The context block is assembled once and returned on BOTH paths. A caller
+    # that asks about a healthy run and gets a result with no context has to
+    # special-case it, and the one that forgot to renders a brief full of zeros.
+    context = {
+        "production_order_id": production_order_id,
+        "component_id": need["component_id"],
+        "required_units": int(need["required_units"]),
+        "usable_stock": int(need["usable_stock"]),
+        "erp_stock": int(need["erp_stock"]),
+        "pool_stock": int(need["pool_stock"]),
+        "claimed_by_others": int(need["claimed_by_others"]),
+        "safety_stock": int(need["safety_stock"]),
+        "daily_usage": int(need["daily_usage"]),
+        "priority": need["priority"],
+        "deadline": need["deadline"].isoformat(),
+        "is_hazmat": need["is_hazmat"],
+        "required_certifications": list(need["required_certifications"] or []),
+    }
+
     shortfall = int(need["required_units"] - need["usable_stock"] + need["safety_stock"])
     if shortfall <= 0:
         return {"shortfall": shortfall, "chosen": None, "options": [], "rejections": [],
                 "suppliers_in_play": [], "excluded": [], "reschedulable": [],
                 "hours_left": round(hours_between(need["deadline"], CLOCK.now()), 2),
+                "context": context,
+                "weights": {"continuity": W_CONTINUITY, "cost": W_COST, "risk": W_RISK},
                 "note": "No shortfall — usable stock covers the run."}
 
     rows = await conn.fetch(CANDIDATE_SQL, need["component_id"], need["warehouse_id"])
@@ -477,19 +498,5 @@ async def solve_for_production_order(
          "product_name": r["product_name"], "units_held": int(r["allocated_units"]),
          "delay_days": r["delay_days"]}
         for r in reschedulable]
-    result["context"] = {
-        "production_order_id": production_order_id,
-        "component_id": need["component_id"],
-        "required_units": int(need["required_units"]),
-        "usable_stock": int(need["usable_stock"]),
-        "erp_stock": int(need["erp_stock"]),
-        "pool_stock": int(need["pool_stock"]),
-        "claimed_by_others": int(need["claimed_by_others"]),
-        "safety_stock": int(need["safety_stock"]),
-        "daily_usage": int(need["daily_usage"]),
-        "priority": need["priority"],
-        "deadline": need["deadline"].isoformat(),
-        "is_hazmat": need["is_hazmat"],
-        "required_certifications": list(need["required_certifications"] or []),
-    }
+    result["context"] = context
     return result
