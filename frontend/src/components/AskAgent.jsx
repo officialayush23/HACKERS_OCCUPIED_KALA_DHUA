@@ -54,11 +54,11 @@ export default function AskAgent({ incidentId }) {
               </p>
               <div className="mt-5 flex flex-wrap justify-center gap-2">
                 {SUGGESTIONS.map((s) => (
-                  <button key={s} onClick={() => send(s)}
-                    className="glass hover:border-primary/40 rounded-full px-3 py-1.5
-                               text-[12px] transition-colors">
+                  <Button key={s} variant="outline" size="sm" onClick={() => send(s)}
+                    className="glass hover:border-primary/40 h-auto rounded-full px-3 py-1.5
+                               text-[12px] font-normal">
                     {s}
-                  </button>
+                  </Button>
                 ))}
               </div>
             </div>

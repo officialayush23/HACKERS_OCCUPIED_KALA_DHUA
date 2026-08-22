@@ -5,6 +5,12 @@ import {
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  Sidebar as SidebarRoot, SidebarContent, SidebarFooter, SidebarGroup,
+  SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarMenu,
+  SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, SidebarRail,
+  SidebarTrigger, useSidebar,
+} from '@/components/ui/sidebar'
 import { Separator } from '@/components/ui/separator'
 
 export const NAV_GROUPS = [
@@ -42,89 +48,114 @@ export const NAV_GROUPS = [
 
 export const ALL_NAV = NAV_GROUPS.flatMap((g) => g.items)
 
+/**
+ * shadcn's Sidebar, collapsible to an icon rail (⌘B / ctrl-B, or the rail edge).
+ * Collapsed, every item keeps its badge and gains a tooltip — an operator who
+ * has folded the nav away should still see that three approvals are waiting.
+ */
 export function Sidebar({ page, onPage, status, criticals, tasks, approvals, org }) {
+  const { state } = useSidebar()
+  const collapsed = state === 'collapsed'
+
   return (
-    <aside className="glass-panel border-sidebar-border text-sidebar-foreground
-                      flex w-[244px] shrink-0 flex-col border-r">
-      <div className="flex items-center gap-2.5 px-4 py-4">
-        <div className="bg-sidebar-primary/15 ring-sidebar-primary/30 flex size-9
-                        items-center justify-center rounded-xl ring-1">
-          <Activity className="text-sidebar-primary size-5" />
-        </div>
-        <div className="min-w-0">
-          <div className="truncate text-sm font-semibold tracking-tight">DisruptionOps</div>
-          <div className="text-muted-foreground truncate text-[11px]">
-            {org?.name?.split(' ').slice(0, 2).join(' ') || 'NEXA Mobility'}
+    <SidebarRoot collapsible="icon" className="glass-panel">
+      <SidebarHeader>
+        <div className="flex items-center gap-2.5 px-1 py-1.5">
+          <div className="bg-sidebar-primary/15 ring-sidebar-primary/30 flex size-8 shrink-0
+                          items-center justify-center rounded-xl ring-1">
+            <Activity className="text-sidebar-primary size-4.5" />
+          </div>
+          <div className="min-w-0 group-data-[collapsible=icon]:hidden">
+            <div className="truncate text-sm font-semibold tracking-tight">DisruptionOps</div>
+            <div className="text-muted-foreground truncate text-[11px]">
+              {org?.name?.split(' ').slice(0, 2).join(' ') || 'NEXA Mobility'}
+            </div>
           </div>
         </div>
-      </div>
+      </SidebarHeader>
 
-      <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-2 pb-2">
+      <SidebarContent>
         {NAV_GROUPS.map((g) => (
-          <div key={g.group}>
-            <div className="text-muted-foreground px-3 pb-1 text-[10px] font-medium
-                            tracking-[0.14em] uppercase">
+          <SidebarGroup key={g.group}>
+            <SidebarGroupLabel className="text-[10px] tracking-[0.14em] uppercase">
               {g.group}
-            </div>
-            <div className="flex flex-col gap-0.5">
-              {g.items.map((n) => {
-                const active = page === n.id
-                const badge =
-                  n.id === 'command' ? criticals :
-                  n.id === 'approvals' ? approvals :
-                  n.id === 'warehouse' ? tasks : 0
-                return (
-                  <button key={n.id} onClick={() => onPage(n.id)}
-                    className={`relative flex items-center gap-2.5 rounded-lg px-3 py-2 text-left
-                      transition-colors ${active
-                        ? 'text-sidebar-accent-foreground'
-                        : 'text-muted-foreground hover:text-sidebar-accent-foreground'}`}>
-                    {active && (
-                      <motion.span layoutId="navpill"
-                        className="bg-sidebar-accent absolute inset-0 rounded-lg"
-                        transition={{ type: 'spring', stiffness: 420, damping: 34 }} />
-                    )}
-                    <n.icon className={`relative size-4 ${active ? 'text-sidebar-primary' : ''}`} />
-                    <span className="relative min-w-0 flex-1">
-                      <span className="block text-[13px] leading-tight font-medium">{n.label}</span>
-                      <span className="text-muted-foreground block text-[10.5px]">{n.sub}</span>
-                    </span>
-                    {badge > 0 && (
-                      <span className="bg-danger text-background relative flex size-4 items-center
-                                       justify-center rounded-full text-[9px] font-semibold">
-                        {badge}
-                      </span>
-                    )}
-                  </button>
-                )
-              })}
-            </div>
-          </div>
+            </SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {g.items.map((n) => {
+                  const active = page === n.id
+                  const badge =
+                    n.id === 'command' ? criticals :
+                    n.id === 'approvals' ? approvals :
+                    n.id === 'warehouse' ? tasks : 0
+                  return (
+                    <SidebarMenuItem key={n.id}>
+                      <SidebarMenuButton
+                        isActive={active}
+                        onClick={() => onPage(n.id)}
+                        tooltip={badge > 0 ? `${n.label} — ${badge} waiting` : n.label}
+                        className="h-auto py-2">
+                        <n.icon className={active ? 'text-sidebar-primary' : ''} />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[13px] leading-tight font-medium">
+                            {n.label}
+                          </span>
+                          <span className="text-muted-foreground block truncate text-[10.5px]">
+                            {n.sub}
+                          </span>
+                        </span>
+                      </SidebarMenuButton>
+                      {badge > 0 && (
+                        <SidebarMenuBadge
+                          className={`bg-danger text-background top-1/2 size-4 -translate-y-1/2
+                                      justify-center rounded-full p-0 text-[9px] font-semibold
+                                      ${collapsed
+                                        ? 'right-1 top-1.5 translate-y-0 size-3.5 text-[8px]'
+                                        : ''}`}>
+                          {badge}
+                        </SidebarMenuBadge>
+                      )}
+                    </SidebarMenuItem>
+                  )
+                })}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
         ))}
-      </div>
+      </SidebarContent>
 
-      <Separator />
-      <div className="p-3">
-        <div className="flex items-center gap-1.5">
-          <span className={`size-1.5 rounded-full ${
-            status === 'live' ? 'bg-ok animate-pulse'
-            : status === 'connecting' ? 'bg-warn' : 'bg-danger'}`} />
-          <span className="text-[11px] font-medium">
-            {status === 'live' ? 'Live — real backend' : status}
-          </span>
+      <SidebarFooter>
+        <Separator className="group-data-[collapsible=icon]:hidden" />
+        <div className="px-1 py-1">
+          <div className="flex items-center gap-1.5">
+            <span className={`size-1.5 shrink-0 rounded-full ${
+              status === 'live' ? 'bg-ok animate-pulse'
+              : status === 'connecting' ? 'bg-warn' : 'bg-danger'}`} />
+            <span className="truncate text-[11px] font-medium
+                             group-data-[collapsible=icon]:hidden">
+              {status === 'live' ? 'Live — real backend' : status}
+            </span>
+          </div>
+          <p className="text-muted-foreground mt-1 text-[10.5px] leading-relaxed
+                        group-data-[collapsible=icon]:hidden">
+            {org?.name ?? 'NEXA Mobility Systems'} · Pune Plant
+          </p>
         </div>
-        <p className="text-muted-foreground mt-1 text-[10.5px] leading-relaxed">
-          {org?.name ?? 'NEXA Mobility Systems'} · Pune Plant
-        </p>
-      </div>
-    </aside>
+      </SidebarFooter>
+
+      {/* Drag or click the edge to fold the nav away. */}
+      <SidebarRail />
+    </SidebarRoot>
   )
 }
 
 export function Topbar({ title, subtitle, clock, theme, onToggleTheme, right }) {
   return (
-    <header className="glass-panel sticky top-0 z-20 flex shrink-0 items-center gap-4
-                       border-b px-6 py-3">
+    <header className="glass-panel sticky top-0 z-20 flex shrink-0 items-center gap-3
+                       border-b px-4 py-3">
+      <SidebarTrigger className="text-muted-foreground hover:text-foreground -ml-1 size-8" />
+      <Separator orientation="vertical" className="!h-5" />
+
       <div className="min-w-0">
         <h1 className="truncate text-[17px] font-semibold tracking-tight">{title}</h1>
         <p className="text-muted-foreground truncate text-[11.5px]">{subtitle}</p>

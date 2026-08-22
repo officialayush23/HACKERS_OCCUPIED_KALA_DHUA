@@ -218,16 +218,16 @@ export default function DecisionExplorer() {
                   const dead = failed.includes(s.id)
                   const used = (baseChosen?.lines ?? []).some((l) => l.supplier_id === s.id)
                   return (
-                    <button key={s.id} onClick={() => toggle(s.id)}
-                      className={`rounded-md border px-2 py-1 text-[11px] transition-colors
+                    <Button key={s.id} variant="outline" size="sm" onClick={() => toggle(s.id)}
+                      className={`h-7 rounded-md px-2 text-[11px] font-normal
                         ${dead
                           ? 'border-danger/50 bg-danger/15 text-danger line-through'
                           : used
                             ? 'border-primary/45 bg-primary/10 text-primary hover:bg-primary/20'
-                            : 'text-muted-foreground hover:bg-accent'}`}>
+                            : 'text-muted-foreground'}`}>
                       {s.name}
                       {used && !dead && <span className="ml-1 opacity-70">· in plan</span>}
-                    </button>
+                    </Button>
                   )
                 })}
               </div>
@@ -382,15 +382,14 @@ export default function DecisionExplorer() {
           {/* ------------------------------------------------- the refusals */}
           {result?.rejections?.length > 0 && (
             <div>
-              <button onClick={() => setShowRejects(!showRejects)}
-                      className="text-muted-foreground hover:text-foreground mb-1.5 flex
-                                 items-center gap-1.5 text-[10px] font-medium
-                                 tracking-[0.14em] uppercase">
+              <Button variant="ghost" size="sm" onClick={() => setShowRejects(!showRejects)}
+                      className="text-muted-foreground mb-1.5 h-6 gap-1.5 px-1.5 text-[10px]
+                                 font-medium tracking-[0.14em] uppercase">
                 <Ban className="size-3" />
                 Considered and refused ({result.rejections.length})
                 <ChevronDown className={`size-3 transition-transform
                   ${showRejects ? '' : '-rotate-90'}`} />
-              </button>
+              </Button>
               <AnimatePresence initial={false}>
                 {showRejects && (
                   <motion.div initial={{ height: 0, opacity: 0 }}

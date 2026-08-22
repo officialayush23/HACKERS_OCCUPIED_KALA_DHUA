@@ -26,6 +26,8 @@ import { Card } from '@/components/ui/card'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { Button } from '@/components/ui/button'
+import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { GitBranch as SchematicIcon, Globe2 } from 'lucide-react'
 
 /** Geography is a second opinion, not the primary view — so it loads only when
@@ -109,7 +111,8 @@ function CommandCenter({ events, revision, status, onGoto }) {
 
   return (
     <div className="grid h-full grid-cols-12">
-      <div className="col-span-8 flex min-h-0 flex-col overflow-y-auto p-5">
+      <ScrollArea className="col-span-8 min-h-0">
+       <div className="flex min-h-full flex-col p-5">
         {/* hero — three numbers, big, no card clutter */}
         <div className="glass grid grid-cols-3 gap-8 rounded-xl px-6 py-5">
           <Stat label="Production risk" icon={TriangleAlert}
@@ -145,10 +148,10 @@ function CommandCenter({ events, revision, status, onGoto }) {
           <div className="flex items-center gap-2 border-b px-4 py-2.5">
             <h2 className="text-muted-foreground text-[10px] font-medium
                            tracking-[0.14em] uppercase">Inbound supply network</h2>
-            <button onClick={() => onGoto('network')}
-                    className="text-muted-foreground hover:text-foreground ml-auto text-[11px]">
+            <Button variant="ghost" size="sm" onClick={() => onGoto('network')}
+                    className="text-muted-foreground ml-auto h-6 px-2 text-[11px]">
               open ↗
-            </button>
+            </Button>
           </div>
           <div className="h-[310px]"><NetworkFlow revision={revision} /></div>
         </Card>
@@ -156,16 +159,17 @@ function CommandCenter({ events, revision, status, onGoto }) {
         <Card className="mt-4 min-h-[300px] flex-1 gap-0 overflow-hidden py-0">
           <AgentActivity events={events} />
         </Card>
-      </div>
+       </div>
+      </ScrollArea>
 
       <div className="glass-panel col-span-4 flex min-h-0 flex-col border-l">
         <div className="border-b px-4 py-2.5">
           <h2 className="text-muted-foreground text-[10px] font-medium
                          tracking-[0.14em] uppercase">Live incident</h2>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <ScrollArea className="min-h-0 flex-1">
           <IncidentPanel revision={revision} onOpenDecision={() => onGoto('decisions')} />
-        </div>
+        </ScrollArea>
         <Separator />
         <ScrollArea className="h-[42%] min-h-0">
           <div className="p-4"><ControlPanel /></div>
@@ -195,12 +199,13 @@ export default function App() {
   const pendingApprovals = (apr?.approvals ?? []).filter((a) => a.status === 'pending').length
 
   return (
-    <div className="flex h-screen">
+   <TooltipProvider delayDuration={200}>
+    <SidebarProvider className="h-screen min-h-0">
       <Sidebar page={page} onPage={setPage} status={status} criticals={criticals}
                tasks={openTasks} approvals={pendingApprovals}
                org={ctx?.organization} />
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <SidebarInset className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <Topbar
           title={meta?.label ?? 'Command Center'}
           subtitle={SUBTITLE[page]}
@@ -227,7 +232,7 @@ export default function App() {
         />
 
         <AnimatePresence mode="wait">
-          <motion.main key={page}
+          <motion.div key={page}
             initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
             transition={{ duration: 0.18 }} className="min-h-0 flex-1 overflow-hidden">
 
@@ -282,9 +287,10 @@ export default function App() {
                 <div className="col-span-7 min-h-0"><WorldState revision={revision} /></div>
               </div>
             )}
-          </motion.main>
+          </motion.div>
         </AnimatePresence>
-      </div>
-    </div>
+      </SidebarInset>
+    </SidebarProvider>
+   </TooltipProvider>
   )
 }

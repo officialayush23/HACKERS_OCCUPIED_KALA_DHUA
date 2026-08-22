@@ -76,8 +76,9 @@ export default function Communications({ revision, incidentId }) {
               const on = current?.id === t.id
               const lying = t.messages.some((m) => m.is_contradiction)
               return (
-                <button key={t.id} onClick={() => setActive(t.id)}
-                  className={`rounded-lg border p-2.5 text-left transition-colors
+                <Button key={t.id} variant="ghost" onClick={() => setActive(t.id)}
+                  className={`h-auto flex-col items-stretch gap-0 rounded-lg border p-2.5
+                    text-left font-normal whitespace-normal
                     ${on ? 'border-primary/40 bg-accent' : 'hover:bg-accent/50 border-transparent'}`}>
                   <div className="flex items-center gap-1.5">
                     <Icon className="text-muted-foreground size-3.5 shrink-0" />
@@ -94,7 +95,7 @@ export default function Communications({ revision, incidentId }) {
                       {last.author_name}: {last.body.split('\n')[0]}
                     </div>
                   )}
-                </button>
+                </Button>
               )
             })}
           </div>
