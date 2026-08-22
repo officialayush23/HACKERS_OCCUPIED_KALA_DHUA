@@ -4,10 +4,14 @@
 -- the awkward numbers — the awkwardness IS the test data.
 -- ============================================================================
 
-truncate run_scores, scenario_runs, audit_events, supplier_memory, approvals,
-         quotes, rfqs, messages, incidents, shipment_tracking, purchase_orders,
-         production_orders, inventory, supplier_catalog, supplier_lanes,
-         suppliers, components, warehouses restart identity cascade;
+-- OPERATIONAL TABLES ONLY. scenario_runs / run_scores / audit_events are
+-- HISTORY and are deliberately NOT truncated here: a demo reset must not
+-- destroy the run comparisons you are tuning against. The API's
+-- POST /api/scenarios/reset?mode=hard clears history separately, on purpose.
+truncate supplier_memory, approvals, quotes, rfqs, messages, incidents,
+         shipment_tracking, purchase_orders, production_orders, inventory,
+         supplier_catalog, supplier_lanes, suppliers, components, warehouses
+         restart identity cascade;
 
 -- ---------- warehouses ------------------------------------------------------
 

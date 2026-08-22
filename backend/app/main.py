@@ -15,17 +15,20 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from .core import CLOCK, HUB, close_db, db, emit
+from .core import CLOCK, HUB, close_db, db, emit, set_run_context
 from . import injector
 from .scenarios import EVENT_TYPES, SCENARIOS, list_scenarios
 from .solver import solve_for_production_order
+from .scorer import score_run
 
 SEED_PATH = pathlib.Path(__file__).resolve().parents[2] / "supabase" / "seed.sql"
 
 app = FastAPI(title="Supply Chain Disruption Control Agent", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    # Any localhost port: 5173 is `vite dev`, 4173 is `vite preview`, and
+    # teammates run on whatever port is free. This is a local dev tool.
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
     allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
 
@@ -125,18 +128,60 @@ async def manual_log(entry: ManualLog):
 
 
 @app.post("/api/scenarios/reset")
-async def reset():
-    """Re-seed from supabase/seed.sql. Under two seconds, fully idempotent."""
+async def reset(mode: str = "demo"):
+    """Re-seed operational state.
+
+    mode=demo (default) : operational tables only. Run history — scenario_runs,
+                          run_scores, audit_events — is PRESERVED, so you keep
+                          the comparisons you are tuning against.
+    mode=hard           : also wipes history. Use between dev sessions, never
+                          mid-tuning and never on demo day.
+    """
+    if mode not in ("demo", "hard"):
+        raise HTTPException(400, "mode must be 'demo' or 'hard'")
     await injector.stop_all()
     if not SEED_PATH.exists():
         raise HTTPException(500, f"seed file not found at {SEED_PATH}")
     sql = SEED_PATH.read_text(encoding="utf-8")
     pool = await db()
     async with pool.acquire() as conn:
+        await conn.execute(
+            "update scenario_runs set status='reset', finished_at=now() "
+            "where status='running'")
         await conn.execute(sql)
+        if mode == "hard":
+            await conn.execute(
+                "truncate run_scores, scenario_runs, audit_events restart identity cascade")
+    set_run_context(None)
     CLOCK.reset()
-    await HUB.broadcast({"kind": "world_reset", "clock": CLOCK.state()})
-    return {"ok": True, "clock": CLOCK.state()}
+    await HUB.broadcast({"kind": "world_reset", "mode": mode, "clock": CLOCK.state()})
+    return {"ok": True, "mode": mode,
+            "history_preserved": mode == "demo", "clock": CLOCK.state()}
+
+
+@app.get("/api/runs")
+async def runs():
+    pool = await db()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """select r.*, s.total, s.continuity, s.cost, s.risk,
+                      s.tool_eff, s.recovery, s.audit,
+                      (select count(*) from audit_events a where a.scenario_run_id = r.id)
+                        as event_count
+                 from scenario_runs r
+                 left join run_scores s on s.run_id = r.id
+                order by r.started_at desc limit 50""")
+    return {"runs": [dict(r) for r in rows]}
+
+
+@app.post("/api/runs/{run_id}/score")
+async def score(run_id: int):
+    pool = await db()
+    async with pool.acquire() as conn:
+        try:
+            return await score_run(conn, run_id)
+        except ValueError as e:
+            raise HTTPException(404, str(e))
 
 
 # ------------------------------------------------------------ operations ---
@@ -154,10 +199,16 @@ async def incidents():
 
 
 @app.get("/api/audit")
-async def audit(incident_id: str | None = None, after: int = 0, limit: int = 300):
+async def audit(incident_id: str | None = None, run_id: int | None = None,
+                after: int = 0, limit: int = 300):
     pool = await db()
     async with pool.acquire() as conn:
-        if incident_id:
+        if run_id is not None:
+            rows = await conn.fetch(
+                """select * from audit_events
+                    where scenario_run_id=$1 and sequence > $2
+                    order by sequence limit $3""", run_id, after, limit)
+        elif incident_id:
             rows = await conn.fetch(
                 """select * from audit_events
                     where incident_id=$1 and sequence > $2

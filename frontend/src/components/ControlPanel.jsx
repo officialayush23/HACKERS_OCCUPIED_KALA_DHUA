@@ -1,172 +1,159 @@
-import { useEffect, useState } from 'react'
-import { api } from '../lib/api'
+import { useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Play, RotateCcw, Zap, PenLine, Loader2, AlertTriangle } from 'lucide-react'
+import { api } from '@/lib/api'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
+import { Separator } from '@/components/ui/separator'
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select'
 
-const EVENT_HINTS = {
-  supplier_delay:        '{"po_id":"PO-7712","delay_days":5}',
-  inventory_correction:  '{"component_id":"COMP-104","usable_stock":250}',
-  supplier_claim:        '{"po_id":"PO-7712","claim":"dispatched"}',
-  tracking_state:        '{"po_id":"PO-7712","tracking_status":"label_created_no_pickup"}',
-  demand_spike:          '{"component_id":"COMP-104","daily_usage":180}',
-  priority_change:       '{"production_order_id":"PROD-882","priority":"critical"}',
-  deadline_pull_in:      '{"production_order_id":"PROD-882","hours_from_now":12}',
-  quality_failure:       '{"supplier_id":"SUP-18","new_quality_score":0.48}',
-  expedite_unavailable:  '{"reason":"Carrier capacity exhausted"}',
-  hazmat_disruption:     '{"po_id":"PO-7718"}',
+const HINTS = {
+  supplier_delay:       '{ "po_id": "PO-7712", "delay_days": 5 }',
+  inventory_correction: '{ "component_id": "COMP-104", "usable_stock": 250 }',
+  supplier_claim:       '{ "po_id": "PO-7712", "claim": "dispatched" }',
+  tracking_state:       '{ "po_id": "PO-7712", "tracking_status": "label_created_no_pickup" }',
+  demand_spike:         '{ "component_id": "COMP-104", "daily_usage": 180 }',
+  priority_change:      '{ "production_order_id": "PROD-882", "priority": "critical" }',
+  deadline_pull_in:     '{ "production_order_id": "PROD-882", "hours_from_now": 12 }',
+  quality_failure:      '{ "supplier_id": "SUP-18", "new_quality_score": 0.48 }',
+  expedite_unavailable: '{ "reason": "Carrier capacity exhausted" }',
+  hazmat_disruption:    '{ "po_id": "PO-7718" }',
 }
 
-function Btn({ children, onClick, busy, tone = 'default', className = '', ...rest }) {
-  const tones = {
-    default: 'bg-neutral-800 hover:bg-neutral-700 text-neutral-100 border-neutral-700',
-    primary: 'bg-amber-500 hover:bg-amber-400 text-neutral-950 border-amber-400 font-medium',
-    danger:  'bg-neutral-900 hover:bg-red-900/40 text-red-300 border-red-900/60',
-  }
-  return (
-    <button
-      onClick={onClick}
-      disabled={busy}
-      className={`rounded-md border px-3 py-2 text-sm transition-colors
-                  disabled:opacity-40 disabled:cursor-not-allowed ${tones[tone]} ${className}`}
-      {...rest}
-    >
-      {children}
-    </button>
-  )
-}
-
-export default function ControlPanel({ onActivity }) {
-  const [scenarios, setScenarios] = useState([])
-  const [eventTypes, setEventTypes] = useState([])
-  const [running, setRunning] = useState([])
-  const [busy, setBusy] = useState(null)
-  const [err, setErr] = useState(null)
-
-  const [customType, setCustomType] = useState('supplier_delay')
-  const [customParams, setCustomParams] = useState(EVENT_HINTS.supplier_delay)
+export default function ControlPanel() {
+  const qc = useQueryClient()
+  const [type, setType] = useState('supplier_delay')
+  const [params, setParams] = useState(HINTS.supplier_delay)
   const [note, setNote] = useState('')
+  const [error, setError] = useState(null)
 
-  const load = () =>
-    api.scenarios()
-      .then((d) => { setScenarios(d.scenarios); setEventTypes(d.event_types); setRunning(d.running) })
-      .catch((e) => setErr(e.message))
+  const { data } = useQuery({
+    queryKey: ['scenarios'],
+    queryFn: api.scenarios,
+    refetchInterval: 3000,
+  })
 
-  useEffect(() => { load() }, [])
-
-  const guard = async (key, fn) => {
-    setBusy(key); setErr(null)
-    try { await fn(); await load(); onActivity?.() }
-    catch (e) { setErr(e.message) }
-    finally { setBusy(null) }
+  const invalidate = () => {
+    setError(null)
+    qc.invalidateQueries({ queryKey: ['scenarios'] })
+    qc.invalidateQueries({ queryKey: ['world'] })
+    qc.invalidateQueries({ queryKey: ['runs'] })
   }
+  const onError = (e) => setError(e.message)
+
+  const inject = useMutation({ mutationFn: api.inject, onSuccess: invalidate, onError })
+  const reset = useMutation({ mutationFn: api.reset, onSuccess: invalidate, onError })
+  const fire = useMutation({ mutationFn: api.customEvent, onSuccess: invalidate, onError })
+  const log = useMutation({
+    mutationFn: api.log,
+    onSuccess: () => { setNote(''); invalidate() },
+    onError,
+  })
+
+  const running = data?.running ?? []
 
   return (
     <div className="flex flex-col gap-5">
-      <section>
-        <div className="mb-2 flex items-center justify-between">
-          <h2 className="text-xs font-semibold uppercase tracking-widest text-neutral-500">
+      <section className="flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xs font-semibold tracking-widest text-muted-foreground uppercase">
             Inject disruption
           </h2>
-          <Btn tone="danger" busy={busy === 'reset'}
-               onClick={() => guard('reset', api.reset)}>
-            Reset world
-          </Btn>
+          <div className="flex gap-1">
+            <Button size="sm" variant="ghost" disabled={reset.isPending}
+                    onClick={() => reset.mutate('demo')} title="Reset world, keep run history">
+              {reset.isPending ? <Loader2 className="animate-spin" /> : <RotateCcw />}
+              Reset
+            </Button>
+            <Button size="sm" variant="ghost"
+                    className="text-destructive hover:text-destructive"
+                    onClick={() => reset.mutate('hard')} title="Also wipe all run history">
+              Hard
+            </Button>
+          </div>
         </div>
 
-        <div className="flex flex-col gap-2">
-          {scenarios.map((s) => {
-            const isRunning = running.includes(s.id)
-            return (
-              <button
-                key={s.id}
-                disabled={!!busy || isRunning}
-                onClick={() => guard(s.id, () => api.inject(s.id))}
-                className="group rounded-lg border border-neutral-800 bg-neutral-900/60 p-3
-                           text-left transition-colors hover:border-amber-500/50
-                           hover:bg-neutral-900 disabled:opacity-50"
-              >
+        {(data?.scenarios ?? []).map((s) => {
+          const isRunning = running.includes(s.id)
+          return (
+            <Card key={s.id}
+              className={`cursor-pointer gap-0 py-0 transition-colors
+                ${isRunning ? 'border-primary/50' : 'hover:border-primary/40'}`}
+              onClick={() => !isRunning && !inject.isPending && inject.mutate(s.id)}>
+              <CardContent className="p-3">
                 <div className="flex items-start justify-between gap-2">
-                  <span className="text-sm font-medium text-neutral-100">{s.title}</span>
-                  <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide
-                    ${isRunning ? 'bg-amber-500/20 text-amber-300' : 'bg-neutral-800 text-neutral-500'}`}>
-                    {isRunning ? 'running' : s.id.split('-')[0]}
-                  </span>
+                  <span className="text-sm font-medium leading-tight">{s.title}</span>
+                  {isRunning
+                    ? <Badge className="shrink-0 gap-1"><Loader2 className="animate-spin" />live</Badge>
+                    : <Badge variant="outline" className="shrink-0 font-mono">{s.id.split('-')[0]}</Badge>}
                 </div>
-                <p className="mt-1 text-xs leading-relaxed text-neutral-500">{s.tests}</p>
-                <p className="mt-1 text-[11px] text-neutral-600">
-                  {s.event_count} events over {s.span_sim_hours}h simulated
-                </p>
-              </button>
-            )
-          })}
-        </div>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{s.tests}</p>
+                <div className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <Play className="size-3" />
+                  {s.event_count} events · {s.span_sim_hours}h simulated
+                </div>
+              </CardContent>
+            </Card>
+          )
+        })}
       </section>
 
-      <section>
-        <h2 className="mb-2 text-xs font-semibold uppercase tracking-widest text-neutral-500">
-          Custom event
+      <Separator />
+
+      <section className="flex flex-col gap-2">
+        <h2 className="flex items-center gap-1.5 text-xs font-semibold tracking-widest text-muted-foreground uppercase">
+          <Zap className="size-3.5" /> Custom event
         </h2>
-        <select
-          value={customType}
-          onChange={(e) => { setCustomType(e.target.value); setCustomParams(EVENT_HINTS[e.target.value] ?? '{}') }}
-          className="mb-2 w-full rounded-md border border-neutral-800 bg-neutral-900 px-2 py-2
-                     text-sm text-neutral-200 outline-none focus:border-amber-500/60"
-        >
-          {eventTypes.map((t) => <option key={t} value={t}>{t}</option>)}
-        </select>
-        <textarea
-          rows={3}
-          value={customParams}
-          onChange={(e) => setCustomParams(e.target.value)}
-          spellCheck={false}
-          className="w-full resize-none rounded-md border border-neutral-800 bg-neutral-950
-                     px-2 py-2 font-mono text-xs text-neutral-300 outline-none
-                     focus:border-amber-500/60"
-        />
-        <Btn
-          tone="primary"
-          className="mt-2 w-full"
-          busy={busy === 'custom'}
-          onClick={() => guard('custom', async () => {
-            let params
-            try { params = JSON.parse(customParams) }
-            catch { throw new Error('Params must be valid JSON') }
-            await api.customEvent({ type: customType, params })
-          })}
-        >
-          Fire event
-        </Btn>
+        <Select value={type} onValueChange={(v) => { setType(v); setParams(HINTS[v] ?? '{}') }}>
+          <SelectTrigger size="sm" className="w-full font-mono text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {(data?.event_types ?? []).map((t) => (
+              <SelectItem key={t} value={t} className="font-mono text-xs">{t}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Textarea rows={3} value={params} spellCheck={false}
+          onChange={(e) => setParams(e.target.value)}
+          className="resize-none font-mono text-xs" />
+        <Button size="sm" disabled={fire.isPending}
+          onClick={() => {
+            let parsed
+            try { parsed = JSON.parse(params) }
+            catch { setError('Params must be valid JSON'); return }
+            fire.mutate({ type, params: parsed })
+          }}>
+          {fire.isPending ? <Loader2 className="animate-spin" /> : <Zap />} Fire event
+        </Button>
       </section>
 
-      <section>
-        <h2 className="mb-2 text-xs font-semibold uppercase tracking-widest text-neutral-500">
-          Manual log
+      <Separator />
+
+      <section className="flex flex-col gap-2">
+        <h2 className="flex items-center gap-1.5 text-xs font-semibold tracking-widest text-muted-foreground uppercase">
+          <PenLine className="size-3.5" /> Manual log
         </h2>
         <div className="flex gap-2">
-          <input
-            value={note}
-            placeholder="Type a note into the audit trail…"
+          <Input value={note} placeholder="Note into the audit trail…"
             onChange={(e) => setNote(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && note.trim()) {
-                guard('log', () => api.log(note.trim())).then(() => setNote(''))
-              }
-            }}
-            className="min-w-0 flex-1 rounded-md border border-neutral-800 bg-neutral-950 px-2 py-2
-                       text-sm text-neutral-200 outline-none placeholder:text-neutral-600
-                       focus:border-amber-500/60"
-          />
-          <Btn
-            busy={busy === 'log' || !note.trim()}
-            onClick={() => guard('log', () => api.log(note.trim())).then(() => setNote(''))}
-          >
-            Add
-          </Btn>
+            onKeyDown={(e) => e.key === 'Enter' && note.trim() && log.mutate(note.trim())}
+            className="h-8 text-xs" />
+          <Button size="sm" variant="secondary" disabled={!note.trim() || log.isPending}
+            onClick={() => log.mutate(note.trim())}>Add</Button>
         </div>
       </section>
 
-      {err && (
-        <p className="rounded-md border border-red-900/60 bg-red-950/40 px-3 py-2 text-xs text-red-300">
-          {err}
-        </p>
+      {error && (
+        <div className="flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2">
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-destructive" />
+          <p className="text-xs leading-relaxed text-destructive">{error}</p>
+        </div>
       )}
     </div>
   )

@@ -10,6 +10,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from contextvars import ContextVar
 from typing import Any
 
 import asyncpg
@@ -136,6 +137,30 @@ HUB = Hub()
 # ----------------------------------------------------------------- audit ----
 
 
+#: Ambient run context. Set while a scenario is executing so every event —
+#: including ones emitted deep inside the solver — is attributable to the run
+#: that produced it. Without this, comparing run 1 against run 2 is guesswork.
+_RUN: ContextVar[dict[str, Any] | None] = ContextVar("run_ctx", default=None)
+
+#: Process-wide fallback. A contextvar only reaches code running inside the
+#: scenario task; an event the operator fires by hand from the dashboard is a
+#: separate request in a separate context and would otherwise lose its run
+#: linkage entirely.
+_ACTIVE: dict[str, Any] | None = None
+
+
+def set_run_context(run_id: int | None, sim_started_at: datetime | None = None) -> None:
+    global _ACTIVE
+    ctx = None if run_id is None else {"run_id": run_id,
+                                       "sim_start": sim_started_at or CLOCK.now()}
+    _RUN.set(ctx)
+    _ACTIVE = ctx
+
+
+def run_context() -> dict[str, Any] | None:
+    return _RUN.get() or _ACTIVE
+
+
 async def emit(
     conn,
     *,
@@ -144,29 +169,42 @@ async def emit(
     human_summary: str,
     incident_id: str | None = None,
     payload: dict[str, Any] | None = None,
+    scenario_run_id: int | None = None,
 ) -> dict[str, Any]:
     """Write one audit event and push it to every dashboard.
 
     ONE event, four representations: human trail, dev log, websocket, and the
     Decision Explorer. Never write a separate human log.
+
+    `ts` is wall-clock and is NOT reproducible across runs. `simulated_at_seconds`
+    is the axis you compare two runs on.
     """
+    ctx = _RUN.get() or _ACTIVE
+    run_id = scenario_run_id if scenario_run_id is not None else (ctx or {}).get("run_id")
+    sim_start = (ctx or {}).get("sim_start") or CLOCK.sim_start
+    sim_seconds = round((CLOCK.now() - sim_start).total_seconds(), 2)
+
     row = await conn.fetchrow(
         """
         insert into audit_events
-            (incident_id, actor, event_type, human_summary, technical_payload)
-        values ($1, $2, $3, $4, $5::jsonb)
-        returning sequence, incident_id, ts, actor, event_type,
-                  human_summary, technical_payload
+            (incident_id, actor, event_type, human_summary, technical_payload,
+             scenario_run_id, simulated_at_seconds)
+        values ($1, $2, $3, $4, $5::jsonb, $6, $7)
+        returning sequence, incident_id, ts, actor, event_type, human_summary,
+                  technical_payload, scenario_run_id, simulated_at_seconds
         """,
         incident_id,
         actor,
         event_type,
         human_summary,
         json.dumps(payload or {}, default=str),
+        run_id,
+        sim_seconds,
     )
     event = dict(row)
     event["technical_payload"] = json.loads(event["technical_payload"])
     event["sim_time"] = CLOCK.now().isoformat()
+    event["simulated_at_seconds"] = float(sim_seconds)
     await HUB.broadcast({"kind": "audit_event", "event": event})
     return event
 

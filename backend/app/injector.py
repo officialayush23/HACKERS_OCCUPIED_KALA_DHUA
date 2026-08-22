@@ -7,10 +7,12 @@ happen.
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import timedelta
 from typing import Any
 
-from .core import CLOCK, broadcast_state, db, emit, next_incident_id
+from .core import (CLOCK, broadcast_state, db, emit, next_incident_id,
+                    run_context, set_run_context)
 from .scenarios import SCENARIOS
 
 _running: dict[str, asyncio.Task] = {}
@@ -20,7 +22,8 @@ _running: dict[str, asyncio.Task] = {}
 
 
 async def _ensure_incident(conn, *, itype: str, component_id: str | None,
-                           po_id: str | None, severity: str = "medium") -> str:
+                           po_id: str | None, severity: str = "medium",
+                           details: dict[str, Any] | None = None) -> str:
     existing = await conn.fetchval(
         "select id from incidents where status not in ('resolved','failed') "
         "and (source_po_id = $1 or ($1 is null and component_id = $2)) limit 1",
@@ -31,9 +34,12 @@ async def _ensure_incident(conn, *, itype: str, component_id: str | None,
     iid = await next_incident_id(conn)
     await conn.execute(
         """insert into incidents (id, type, severity, status, component_id,
-                                  source_po_id, thread_id)
-           values ($1,$2,$3::severity_level,'open',$4,$5,$1)""",
+                                  source_po_id, thread_id, details)
+           values ($1,$2,$3::severity_level,'open',$4,$5,$1,$6::jsonb)""",
         iid, itype, severity, component_id, po_id,
+        json.dumps({**(details or {}),
+                    "scenario_run_id": (run_context() or {}).get("run_id"),
+                    "source": "scenario_engine"}, default=str),
     )
     await emit(conn, incident_id=iid, actor="injector", event_type="INCIDENT_OPENED",
                human_summary=f"Incident {iid} opened: {itype}.",
@@ -74,7 +80,8 @@ async def apply_event(conn, etype: str, params: dict[str, Any],
                 where supplier_id = $1""", po["supplier_id"], days)
         iid = incident_id or await _ensure_incident(
             conn, itype="supplier_delay", component_id=po["component_id"],
-            po_id=po_id, severity="high")
+            po_id=po_id, severity="high",
+            details={"delay_days": days, "supplier_id": po["supplier_id"]})
         summary = (f"{po['supplier_id']} delayed {po_id} by ~{days} days "
                    f"({po['component_id']}).")
         await emit(conn, incident_id=iid, actor="injector",
@@ -260,6 +267,7 @@ async def apply_event(conn, etype: str, params: dict[str, Any],
 async def _run(scenario_id: str, run_id: int) -> None:
     sc = SCENARIOS[scenario_id]
     pool = await db()
+    set_run_context(run_id, CLOCK.now())      # every nested emit inherits this
     start = CLOCK.elapsed_sim_hours()
     try:
         for ev in sorted(sc["events"], key=lambda e: e.get("at_h", 0)):
@@ -270,11 +278,24 @@ async def _run(scenario_id: str, run_id: int) -> None:
                 await apply_event(conn, ev["type"], ev.get("params", {}))
         async with pool.acquire() as conn:
             await conn.execute(
-                "update scenario_runs set finished_at=now() where id=$1", run_id)
+                "update scenario_runs set finished_at=now(), status='completed' "
+                "where id=$1", run_id)
         await broadcast_state("scenario_finished", {"scenario_id": scenario_id,
                                                     "run_id": run_id})
     except asyncio.CancelledError:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "update scenario_runs set finished_at=now(), status='cancelled' "
+                "where id=$1", run_id)
         await broadcast_state("scenario_cancelled", {"scenario_id": scenario_id})
+        raise
+    except Exception as exc:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "update scenario_runs set finished_at=now(), status='failed', "
+                "failure_reason=$2 where id=$1", run_id, str(exc)[:500])
+        await broadcast_state("scenario_failed",
+                              {"scenario_id": scenario_id, "error": str(exc)})
         raise
     finally:
         _running.pop(scenario_id, None)
@@ -289,7 +310,10 @@ async def inject(scenario_id: str) -> dict[str, Any]:
     async with pool.acquire() as conn:
         run_id = await conn.fetchval(
             "insert into scenario_runs (scenario_id) values ($1) returning id", scenario_id)
+        # Context BEFORE the first emit, or event #1 is orphaned from its own run.
+        set_run_context(run_id, CLOCK.now())
         await emit(conn, actor="injector", event_type="SCENARIO_STARTED",
+                   scenario_run_id=run_id,
                    human_summary=f"Scenario {scenario_id} injected: "
                                  f"{SCENARIOS[scenario_id]['title']}",
                    payload={"scenario_id": scenario_id, "run_id": run_id})

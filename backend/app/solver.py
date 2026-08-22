@@ -51,7 +51,7 @@ class Option:
     label: str = ""
     total_cost: float = 0.0
     units_covered: int = 0
-    arrival_hours: float = 0.0
+    arrival_hours: float | None = None   # None = never arrives (do_nothing)
     continuity: float = 0.0
     cost_score: float = 0.0
     risk_score: float = 0.0
@@ -131,7 +131,19 @@ def _hard_filter(candidates: list[dict], *, shortfall: int, hours_left: float,
         c = {**c, "lead_time_hours": lead_h}
         kept.append(c)
 
-    return kept, rejected
+    # A supplier with SEA and AIR lanes fails certification twice. Dedupe on
+    # (supplier, constraint) so the Decision Explorer shows one clean reason.
+    seen: set[tuple[str, str]] = set()
+    unique: list[Rejection] = []
+    for r in rejected:
+        key = (r.supplier_id, r.constraint)
+        if key not in seen:
+            seen.add(key)
+            unique.append(r)
+    # A supplier rejected on one lane but viable on another is not rejected.
+    viable = {c["supplier_id"] for c in kept}
+    unique = [r for r in unique if r.supplier_id not in viable]
+    return kept, unique
 
 
 # -------------------------------------------------------------- scoring ----
@@ -143,7 +155,7 @@ def _score(opt: Option, *, shortfall: int, hours_left: float, baseline_value: fl
         opt.continuity = 0.0
     else:
         coverage = min(1.0, opt.units_covered / shortfall)
-        if opt.arrival_hours <= hours_left:
+        if opt.arrival_hours is None or opt.arrival_hours <= hours_left:
             opt.continuity = coverage
         else:
             days_late = (opt.arrival_hours - hours_left) / 24.0
@@ -217,7 +229,6 @@ def solve(*, candidates: list[dict], shortfall: int, deadline, required_certs: l
     # --- do nothing (always evaluated, so the agent can prove it is worse) ---
     do_nothing = Option(kind="do_nothing", label="Do nothing",
                         rationale="Accept the shortfall and let the line stop.")
-    do_nothing.arrival_hours = float("inf")
     options.append(_score(do_nothing, shortfall=shortfall, hours_left=hours_left,
                           baseline_value=baseline_value, priority=priority))
 
@@ -284,17 +295,19 @@ def solve(*, candidates: list[dict], shortfall: int, deadline, required_certs: l
 
 # ------------------------------------------------------------- data load ---
 
+# Joins supplier_effective, never suppliers. `suppliers.reliability_score` is a
+# seeded prior; `supplier_memory.derived_reliability` is authoritative. Reading
+# both and picking one at the call site is how two scores silently compete.
 CANDIDATE_SQL = """
 select sc.supplier_id,
-       s.name as supplier_name,
-       s.certifications,
-       s.quality_score,
-       coalesce(m.derived_reliability, s.reliability_score) as derived_reliability,
+       se.name as supplier_name,
+       se.certifications,
+       se.quality_score,
+       se.effective_reliability as derived_reliability,
        sc.unit_price, sc.lead_time_days, sc.available_quantity, sc.min_order_quantity,
        l.mode, l.transit_days, l.freight_cost
   from supplier_catalog sc
-  join suppliers s on s.id = sc.supplier_id
-  left join supplier_memory m on m.supplier_id = sc.supplier_id
+  join supplier_effective se on se.supplier_id = sc.supplier_id
   join supplier_lanes l on l.supplier_id = sc.supplier_id and l.warehouse_id = $2
  where sc.component_id = $1
 """
