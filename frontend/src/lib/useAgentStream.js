@@ -31,13 +31,11 @@ export function useAgentStream() {
   const clear = useCallback(() => setEvents([]), [])
 
   // Anything derived from the world rather than pushed down the socket.
+  // Anything derived from the world, refreshed on every event. This is a
+  // denylist rather than a list of keys to remember: the previous version was
+  // an allowlist, and every query key added afterwards silently went stale.
   const refresh = useCallback(() => {
-    for (const k of ['now', 'kpis', 'warehouse', 'approvals', 'incidents',
-                     'network', 'world', 'threads', 'solve', 'context', 'runs',
-                     'intelligence', 'human-input', 'supplier', 'supplier-directory',
-                     'scenario-context']) {
-      qc.invalidateQueries({ queryKey: [k] })
-    }
+    qc.invalidateQueries({ predicate: (q) => q.queryKey?.[0] !== 'llm' })
   }, [qc])
 
   const merge = useCallback((incoming) => {

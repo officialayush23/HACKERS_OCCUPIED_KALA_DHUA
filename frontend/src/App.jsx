@@ -17,6 +17,7 @@ import RunHistory from '@/components/RunHistory'
 import DecisionLog from '@/components/DecisionLog'
 import Accuracy from '@/components/Accuracy'
 import NoRun from '@/components/NoRun'
+import Evaluation from '@/components/Evaluation'
 import NowBar from '@/components/NowBar'
 import ActionQueue from '@/components/ActionQueue'
 import AgentStatus from '@/components/AgentStatus'
@@ -98,6 +99,7 @@ const SUBTITLE = {
   audit:     'Every action the agent took, and the evidence behind it',
   comms:     'Supplier, warehouse and carrier conversations',
   scoring:   'Runs scored against the judges\u2019 own formula',
+  evaluation:'Did this run pass \u2014 criterion by criterion, with the evidence',
   warehouse: 'Physical reality at Pune Plant',
 }
 
@@ -355,6 +357,10 @@ export default function App() {
                   <RunHistory revision={revision} />
                 </ScrollArea>
               </div>
+            )}
+
+            {page === 'evaluation' && (
+              <Evaluation onRunSim={() => setSimOpen(true)} />
             )}
           </motion.div>
         </AnimatePresence>

@@ -238,6 +238,8 @@ class CustomScenario(BaseModel):
     events: list[dict[str, Any]]
     tests: str | None = None
     run: bool = True
+    # Optional world construction: suppliers, components, inventory, orders.
+    world: dict[str, Any] | None = None
 
 
 @app.post("/api/scenarios/custom")
@@ -250,6 +252,19 @@ async def add_custom_scenario(body: CustomScenario):
     disappear on restart, so nothing anyone types here can become a permanent
     part of the suite by accident.
     """
+    # A `world` block is applied before the first event fires, so a tester can
+    # construct the situation they want to test rather than only poke the seed.
+    if body.world:
+        pool = await db()
+        try:
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    built = await worldbuild.apply(conn, body.world)
+        except worldbuild.WorldError as e:
+            raise HTTPException(400, str(e))
+    else:
+        built = {}
+
     try:
         sid = register_custom(body.name, body.events, body.tests)
     except ValueError as e:
@@ -257,12 +272,13 @@ async def add_custom_scenario(body: CustomScenario):
 
     detail = next((s for s in list_scenarios() if s["id"] == sid), None)
     if not body.run:
-        return {"scenario_id": sid, "scenario": detail, "status": "registered"}
+        return {"scenario_id": sid, "scenario": detail, "status": "registered",
+                "world_applied": built}
     try:
         out = await injector.inject(sid)
     except ValueError as e:
         raise HTTPException(409, str(e))
-    return {**out, "scenario": detail}
+    return {**out, "scenario": detail, "world_applied": built}
 
 
 @app.delete("/api/scenarios/custom/{scenario_id}")
@@ -454,6 +470,38 @@ async def active_run():
         d["title"] = SCENARIOS.get(d.get("scenario_id"), {}).get("title", d.get("scenario_id"))
         d["tests"] = SCENARIOS.get(d.get("scenario_id"), {}).get("tests")
         return {"active": d}
+
+
+@app.get("/api/evaluation/current")
+async def current_evaluation():
+    """The active run, judged against explicit criteria. May be nothing."""
+    pool = await db()
+    async with pool.acquire() as conn:
+        run_id = await _active_run_id(conn)
+        if run_id is None:
+            return {"evaluated": False, "run_id": None,
+                    "reason": "No active run. Nothing has been asked of the agent yet."}
+        return await evaluation.evaluate(conn, run_id)
+
+
+@app.post("/api/evaluation/{run_id}")
+async def evaluate_run(run_id: int):
+    """Re-judge a specific run from its own artefacts."""
+    pool = await db()
+    async with pool.acquire() as conn:
+        return await evaluation.evaluate(conn, run_id)
+
+
+@app.get("/api/world/explain")
+async def explain_world():
+    """What a test will run against — including which options are traps.
+
+    A tester who cannot see which suppliers are cheap-and-refusable cannot tell
+    whether the agent avoided them deliberately or by luck.
+    """
+    pool = await db()
+    async with pool.acquire() as conn:
+        return await worldbuild.explain(conn)
 
 
 @app.post("/api/system/hard-reset")

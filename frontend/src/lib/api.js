@@ -82,6 +82,8 @@ export const api = {
   decide:      (id, b)     => post(`/api/approvals/${id}/decide`, b),
   accuracy:    ()          => req('/api/accuracy'),
   activeRun:   ()          => req('/api/runs/active'),
+  evaluation:  ()          => req('/api/evaluation/current'),
+  worldExplain:()          => req('/api/world/explain'),
   hardReset:   ()          => post('/api/system/hard-reset'),
   solve:       (po, rec, exclude = []) => req(
     `/api/solve/${po}?record=${rec ? 'true' : 'false'}` +

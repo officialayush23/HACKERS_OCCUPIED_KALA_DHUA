@@ -383,6 +383,20 @@ async def _run(scenario_id: str, run_id: int) -> None:
             await conn.execute(
                 "update scenario_runs set finished_at=now(), status='completed' "
                 "where id=$1", run_id)
+
+            # Judge the run the moment it ends, from its own artefacts. A verdict
+
+            # computed later, against a world that has since moved, is not a verdict.
+
+            from . import evaluation
+
+            try:
+
+                await evaluation.evaluate(conn, run_id)
+
+            except Exception:               # never let scoring break a run
+
+                pass
         await broadcast_state("scenario_finished", {"scenario_id": scenario_id,
                                                     "run_id": run_id})
     except asyncio.CancelledError:

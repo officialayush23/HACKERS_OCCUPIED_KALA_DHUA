@@ -1,30 +1,45 @@
 /**
- * Targeted refetching.
+ * Keeping every screen honest about the same moment.
  *
- * `queryClient.invalidateQueries()` with no argument invalidates *everything*,
- * including the scenario list and the audit backfill. Sending one message
- * therefore refetched the entire application and the screen visibly reloaded.
+ * The WebSocket is the single push channel — the agent emits one event, the hub
+ * fans it out, and every pane re-reads. There is no second channel (no Supabase
+ * Realtime) on purpose: two push paths eventually disagree, and the one thing
+ * this dashboard cannot afford is two panels telling different stories.
  *
- * These are the sets that actually change together.
+ * The bug this replaces was not caching. It was an **allowlist**: the socket
+ * invalidated a hand-written list of query keys, so every key added later —
+ * `accuracy`, `activeRun`, `agentSteps` — silently never refreshed. Panels went
+ * stale in exactly the places nobody thought to register.
+ *
+ * So the default is now a denylist. Anything derived from the world refreshes on
+ * every event; only genuinely static things are excluded. A new query key is
+ * covered the moment it exists, which is the failure mode that actually bit us.
  */
+
+/** Things no world event can change. Everything else refreshes. */
+const STATIC = new Set([
+  'llm',        // model health — polled on its own, unaffected by the world
+])
+
+/** Narrow sets, for the cases where a full sweep is genuinely wasteful. */
 const SETS = {
-  // a physical count, a receipt, a supplier reply — the world moved
-  world: ['now', 'kpis', 'warehouse', 'incidents', 'network', 'world', 'solve',
-          'context', 'accuracy', 'intelligence', 'human-input', 'supplier'],
-  // someone decided something
-  decision: ['now', 'approvals', 'incidents', 'solve', 'accuracy', 'kpis',
-             'intelligence', 'human-input'],
-  // a conversation advanced
-  comms: ['threads', 'now', 'accuracy', 'human-input', 'supplier', 'intelligence'],
-  // a scenario started, stopped, or the world was re-seeded
-  simulation: ['scenarios', 'scenario-context', 'now', 'kpis', 'world', 'context',
-               'runs', 'incidents', 'network', 'warehouse', 'solve', 'accuracy',
-               'threads', 'intelligence', 'human-input', 'supplier',
-               'supplier-directory'],
+  comms:      ['threads', 'now', 'accuracy', 'intelligence'],
+  decision:   ['now', 'approvals', 'incidents', 'solve', 'accuracy', 'kpis',
+               'intelligence', 'activeRun'],
+  simulation: null,   // null = everything; a run start changes the whole world
+  world:      null,
 }
 
 export function refresh(qc, which = 'world') {
-  for (const key of SETS[which] ?? SETS.world) {
-    qc.invalidateQueries({ queryKey: [key] })
+  const keys = SETS[which]
+
+  if (!keys) {
+    // Sweep. `predicate` sees every cached query, so nothing can be forgotten.
+    qc.invalidateQueries({
+      predicate: (q) => !STATIC.has(q.queryKey?.[0]),
+    })
+    return
   }
+
+  for (const key of keys) qc.invalidateQueries({ queryKey: [key] })
 }
