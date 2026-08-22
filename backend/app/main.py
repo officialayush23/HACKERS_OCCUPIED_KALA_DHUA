@@ -260,16 +260,24 @@ async def world():
 
 
 @app.get("/api/solve/{production_order_id}")
-async def solve_endpoint(production_order_id: str, record: bool = False):
-    """Run the deterministic solver. `record=true` writes the reasoning to audit."""
+async def solve_endpoint(production_order_id: str, record: bool = False,
+                         exclude: str = ""):
+    """Run the deterministic solver. No LLM anywhere on this path.
+
+    `record=true` writes the reasoning to the audit log.
+    `exclude=SUP-21,SUP-64` drops those suppliers from the candidate pool before
+    anything is scored — this is the what-if. A simulation never records.
+    """
+    drop = [x.strip().upper() for x in exclude.split(",") if x.strip()]
     pool = await db()
     async with pool.acquire() as conn:
         try:
-            result = await solve_for_production_order(conn, production_order_id)
+            result = await solve_for_production_order(
+                conn, production_order_id, exclude=drop)
         except ValueError as e:
             raise HTTPException(404, str(e))
 
-        if record:
+        if record and not drop:
             iid = await conn.fetchval(
                 "select id from incidents where component_id=$1 "
                 "and status not in ('resolved','failed') order by opened_at desc limit 1",

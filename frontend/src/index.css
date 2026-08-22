@@ -179,3 +179,82 @@ body {
 [data-slot="card"]:hover {
   border-color: color-mix(in oklab, var(--primary) 30%, var(--border));
 }
+
+/* Light mode glass: white surfaces need a lighter veil and a softer shadow,
+   otherwise the dark-tuned values read as dirty grey. */
+:root:not(.dark) [data-slot="card"],
+:root:not(.dark) .glass {
+  background: color-mix(in oklab, white 72%, transparent);
+  border-color: color-mix(in oklab, var(--border) 100%, transparent);
+  box-shadow:
+    0 1px 0 0 color-mix(in oklab, white 90%, transparent) inset,
+    0 8px 28px -14px color-mix(in oklab, black 22%, transparent);
+}
+:root:not(.dark) .glass-panel {
+  background: color-mix(in oklab, white 62%, transparent);
+}
+
+/* ---- Mapbox markers -------------------------------------------------------
+   Custom DOM markers so the map speaks the same visual language as the
+   schematic: a lime pulse for the plant, tone-coded dots for suppliers, and a
+   red ping only where a supplier's claim has been contradicted. */
+.mb-plant { position: relative; display: grid; place-items: center; cursor: default; }
+.mb-plant-dot {
+  width: 12px; height: 12px; border-radius: 999px;
+  background: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--primary) 25%, transparent);
+}
+.mb-plant-ping {
+  position: absolute; width: 12px; height: 12px; border-radius: 999px;
+  background: var(--primary); opacity: .45;
+  animation: mb-ping 2.2s cubic-bezier(0,0,.2,1) infinite;
+}
+.mb-label {
+  position: absolute; top: 14px; white-space: nowrap;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .02em;
+  color: var(--foreground);
+  text-shadow: 0 1px 3px color-mix(in oklab, var(--background) 90%, transparent);
+}
+.mb-node { position: relative; display: grid; place-items: center; cursor: pointer; }
+.mb-dot {
+  width: 9px; height: 9px; border-radius: 999px;
+  background: var(--tone, var(--primary));
+  box-shadow: 0 0 0 2.5px color-mix(in oklab, var(--tone, var(--primary)) 22%, transparent);
+  transition: transform .18s ease;
+}
+.mb-node:hover .mb-dot { transform: scale(1.5); }
+.mb-node.mb-idle .mb-dot { opacity: .5; }
+.mb-ping {
+  position: absolute; width: 9px; height: 9px; border-radius: 999px;
+  background: var(--tone); opacity: .5;
+  animation: mb-ping 1.6s cubic-bezier(0,0,.2,1) infinite;
+}
+@keyframes mb-ping { 0% { transform: scale(1); opacity: .5 } 100% { transform: scale(3.2); opacity: 0 } }
+.mapboxgl-ctrl-group { background: color-mix(in oklab, var(--card) 80%, transparent) !important;
+  border: 1px solid var(--border) !important; }
+
+/* Minimal mapbox-gl layout rules, inlined so the map never depends on the
+   vendor stylesheet resolving. Only positioning — all colour comes from our
+   own tokens above. */
+.mapboxgl-map { position: relative; overflow: hidden; -webkit-tap-highlight-color: transparent; }
+.mapboxgl-canvas-container, .mapboxgl-canvas { position: absolute; top: 0; left: 0; }
+.mapboxgl-canvas-container.mapboxgl-interactive { cursor: grab; }
+.mapboxgl-canvas-container.mapboxgl-interactive:active { cursor: grabbing; }
+.mapboxgl-marker {
+  position: absolute; top: 0; left: 0; will-change: transform;
+  opacity: 1; transition: opacity .2s;
+}
+.mapboxgl-control-container { position: absolute; inset: 0; pointer-events: none; }
+.mapboxgl-ctrl-bottom-right {
+  position: absolute; right: 0; bottom: 0; pointer-events: auto;
+  z-index: 2; padding: 10px; display: flex; flex-direction: column;
+}
+.mapboxgl-ctrl-group { border-radius: 8px; overflow: hidden; }
+.mapboxgl-ctrl-group button {
+  display: block; width: 29px; height: 29px; background: transparent;
+  border: 0; cursor: pointer; color: var(--foreground);
+}
+.mapboxgl-ctrl-group button + button { border-top: 1px solid var(--border); }
+.mapboxgl-ctrl-group button:hover { background: var(--accent); }
+.mapboxgl-ctrl-icon { width: 100%; height: 100%; background-position: 50%;
+  background-repeat: no-repeat; }

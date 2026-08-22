@@ -158,6 +158,15 @@ async def agent_request_warehouse(conn, *, incident_id: str, component_id: str,
     """A warehouse request is a TASK plus a message. Two different things."""
     name = context.get("component_name", component_id)
 
+    # One open task per (component, type). The agent re-investigates on every new
+    # piece of evidence; the warehouse should not get the same request four times.
+    existing = await conn.fetchval(
+        """select id from warehouse_tasks
+            where component_id=$1 and task_type=$2 and status in ('open','in_progress')
+            limit 1""", component_id, task_type)
+    if existing:
+        return {"task_id": existing, "thread_id": None, "deduped": True}
+
     task_id = await conn.fetchval(
         """insert into warehouse_tasks
              (facility_id, component_id, incident_id, task_type, priority,

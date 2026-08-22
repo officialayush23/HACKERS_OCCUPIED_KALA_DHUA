@@ -1,151 +1,432 @@
-import { useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Ban, Check, Loader2, Scale } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { AnimatePresence, motion } from 'motion/react'
+import {
+  Ban, Check, ChevronDown, Clock, FlaskConical, Loader2, RotateCcw, Scale, TrendingDown,
+  TrendingUp, TriangleAlert,
+} from 'lucide-react'
 import { api } from '@/lib/api'
+import { inr } from '@/lib/format'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Separator } from '@/components/ui/separator'
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select'
 
-const inr = (n) => '₹' + Number(n ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })
+/**
+ * Every option the solver considered, side by side, plus the ones it refused.
+ *
+ * Two things make this more than a table:
+ *
+ *   1. The refusals are first-class. A judge asking "why not the ₹108 supplier"
+ *      gets the answer without opening a log.
+ *   2. The what-if re-runs the *whole* solver with a supplier removed from the
+ *      candidate pool, so the plan re-forms around the loss instead of just
+ *      deleting the winning row. That is a fragility test, not a filter.
+ *
+ * No LLM touches this screen. It is the deterministic path, shown honestly.
+ */
 
 const CONSTRAINT = {
-  REQUIRED_CERTIFICATION: 'certification',
-  MIN_ORDER_QUANTITY: 'MOQ',
-  HAZMAT_NO_AIR: 'hazmat',
-  OVER_BUDGET: 'budget',
+  REQUIRED_CERTIFICATION: 'not certified',
+  MIN_ORDER_QUANTITY:     'minimum order too large',
+  HAZMAT_NO_AIR:          'hazmat cannot fly',
+  OVER_BUDGET:            'over budget',
 }
 
-function Metric({ label, value, tone }) {
+const KIND = {
+  single:     'One supplier',
+  split:      'Split order',
+  do_nothing: 'No action',
+  reschedule: 'Reschedule',
+}
+
+const hrs = (h) => (h == null ? 'never' : h < 48 ? `${Math.round(h)}h` : `${(h / 24).toFixed(1)}d`)
+
+/** Signed delta against the baseline plan, coloured by whether it hurts. */
+function Delta({ now, was, kind = 'cost' }) {
+  if (was == null || now == null || Math.abs(now - was) < 0.001) return null
+  const worse = kind === 'score' ? now < was : now > was
+  const Icon = now > was ? TrendingUp : TrendingDown
+  const txt = kind === 'cost'
+    ? `${now > was ? '+' : '−'}${inr(Math.abs(now - was))}`
+    : kind === 'hours'
+      ? `${now > was ? '+' : '−'}${hrs(Math.abs(now - was))}`
+      : `${now > was ? '+' : '−'}${Math.abs(now - was).toFixed(3)}`
   return (
-    <div>
-      <div className="mb-1 flex justify-between text-[10px] text-muted-foreground">
-        <span>{label}</span><span className="tabular-nums">{value.toFixed(2)}</span>
-      </div>
-      <Progress value={value * 100} className="h-1" indicatorClassName={tone} />
+    <span className={`ml-1.5 inline-flex items-center gap-0.5 font-mono text-[10px]
+                      ${worse ? 'text-danger' : 'text-ok'}`}>
+      <Icon className="size-2.5" />{txt}
+    </span>
+  )
+}
+
+function Bar({ value, tone }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <Progress value={(value ?? 0) * 100} className="h-1 flex-1"
+                indicatorClassName={tone} />
+      <span className="w-8 shrink-0 text-right font-mono text-[10.5px] tabular-nums">
+        {(value ?? 0).toFixed(2)}
+      </span>
     </div>
   )
 }
 
-export default function DecisionExplorer() {
-  const qc = useQueryClient()
-  const [poId, setPoId] = useState('PROD-882')
-  const [result, setResult] = useState(null)
+/** One row of the matrix: a label plus one cell per option. */
+function Row({ label, hint, cells, chosenIndex, className = '' }) {
+  return (
+    <tr className={`border-t ${className}`}>
+      <th scope="row" className="text-muted-foreground w-[132px] py-2 pr-3 pl-4 text-left
+                                 align-top text-[11px] font-normal">
+        {label}
+        {hint && <span className="block text-[9.5px] opacity-60">{hint}</span>}
+      </th>
+      {cells.map((c, i) => (
+        <td key={i} className={`px-3 py-2 align-top text-[12px]
+          ${i === chosenIndex ? 'bg-primary/[0.06]' : ''}`}>
+          {c}
+        </td>
+      ))}
+    </tr>
+  )
+}
 
-  const solve = useMutation({
-    mutationFn: ({ id, record }) => api.solve(id, record),
-    onSuccess: (r) => { setResult(r); qc.invalidateQueries({ queryKey: ['world'] }) },
-  })
+export default function DecisionExplorer() {
+  const { data: ctx } = useQuery({ queryKey: ['context'], queryFn: api.context })
+  const orders = ctx?.production ?? []
+
+  const [poId, setPoId] = useState(null)
+  const [failed, setFailed] = useState([])     // suppliers the what-if has killed
+  const [showRejects, setShowRejects] = useState(true)
+
+  // Default to the order in the most trouble, not the first one alphabetically.
+  useEffect(() => {
+    if (poId || !orders.length) return
+    const worst = [...orders].sort((a, b) => (b.shortfall ?? 0) - (a.shortfall ?? 0))[0]
+    setPoId(worst?.id ?? orders[0].id)
+  }, [orders, poId])
+
+  useEffect(() => { setFailed([]) }, [poId])
+
+  // Baseline: the real plan. Simulated: the same solve with suppliers removed.
+  const base = useQuery({
+    queryKey: ['solve', poId], queryFn: () => api.solve(poId, false),
+    enabled: !!poId })
+  const sim = useQuery({
+    queryKey: ['solve', poId, failed.join(',')],
+    queryFn: () => api.solve(poId, false, failed),
+    enabled: !!poId && failed.length > 0 })
+
+  const simulating = failed.length > 0
+  const result = simulating ? sim.data : base.data
+  const loading = simulating ? sim.isLoading : base.isLoading
+  const error = (simulating ? sim.error : base.error) ?? null
+
+  const options = useMemo(() => (result?.options ?? []).slice(0, 4), [result])
+  const baseChosen = base.data?.chosen ?? null
+  const order = orders.find((o) => o.id === poId)
+
+  const toggle = (id) =>
+    setFailed((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id]))
+
+  const planChanged = simulating && baseChosen && result?.chosen &&
+    result.chosen.label !== baseChosen.label
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2">
-        <h2 className="flex items-center gap-1.5 text-xs font-semibold tracking-widest text-muted-foreground uppercase">
-          <Scale className="size-3.5" /> Decision explorer
+      {/* ---------------------------------------------------------- header */}
+      <div className="flex shrink-0 items-center gap-2.5 border-b px-4 py-2.5">
+        <h2 className="text-muted-foreground flex items-center gap-1.5 text-[10px]
+                       font-medium tracking-[0.14em] uppercase">
+          <Scale className="size-3.5" />Decision explorer
         </h2>
-        <Input value={poId} onChange={(e) => setPoId(e.target.value.toUpperCase())}
-          className="ml-auto h-7 w-28 font-mono text-xs" />
-        <Button size="sm" variant="secondary" disabled={solve.isPending}
-          onClick={() => solve.mutate({ id: poId, record: false })}>Solve</Button>
-        <Button size="sm" disabled={solve.isPending}
-          onClick={() => solve.mutate({ id: poId, record: true })}>
-          {solve.isPending && <Loader2 className="animate-spin" />} + audit
-        </Button>
+
+        <Select value={poId ?? undefined} onValueChange={setPoId}>
+          <SelectTrigger className="ml-auto h-7 w-[300px] text-[12px]">
+            <SelectValue placeholder="choose a production run" />
+          </SelectTrigger>
+          <SelectContent>
+            {orders.map((o) => (
+              <SelectItem key={o.id} value={o.id} className="text-[12px]">
+                {o.product_name ?? o.id}
+                <span className="text-muted-foreground"> · {o.oem_customer}</span>
+                {o.shortfall > 0 && (
+                  <span className="text-danger"> · {o.shortfall} short</span>
+                )}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        {loading && <Loader2 className="text-muted-foreground size-3.5 animate-spin" />}
       </div>
 
       <ScrollArea className="min-h-0 flex-1">
-        <div className="p-4">
-          {solve.isError && <p className="text-xs text-destructive">{solve.error.message}</p>}
-          {!result && !solve.isError && (
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              Run the deterministic solver against a production order. No LLM involved —
-              this is the code path that must never violate a constraint.
-            </p>
+        <div className="flex flex-col gap-4 p-4">
+
+          {error && (
+            <p className="text-danger text-[12px]">{String(error.message ?? error)}</p>
           )}
 
+          {/* ------------------------------------------------ the situation */}
           {result && (
-            <div className="flex flex-col gap-4">
-              <div className="grid grid-cols-4 gap-2">
-                {[['Shortfall', `${result.shortfall}u`],
-                  ['Time left', `${result.days_left_display}d`],
-                  ['Budget', inr(result.budget_left)],
-                  ['Threshold', inr(result.approval_threshold)]].map(([k, v]) => (
-                  <div key={k} className="rounded-md border bg-card px-2 py-1.5">
-                    <div className="text-[10px] tracking-wide text-muted-foreground uppercase">{k}</div>
-                    <div className="font-mono text-sm">{v}</div>
-                  </div>
-                ))}
-              </div>
-
-              {result.rejections?.length > 0 && (
-                <div>
-                  <h3 className="mb-1.5 flex items-center gap-1.5 text-[10px] tracking-widest text-muted-foreground uppercase">
-                    <Ban className="size-3" /> Rejected — and why
-                  </h3>
-                  <div className="flex flex-col gap-1">
-                    {result.rejections.map((r, i) => (
-                      <div key={i} className="rounded-md border bg-card px-2.5 py-2">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-xs">{r.supplier_id}</span>
-                          <Badge variant="outline" className="border-danger/50 bg-danger/15 text-danger">
-                            {CONSTRAINT[r.constraint] ?? r.constraint}
-                          </Badge>
-                        </div>
-                        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{r.human_reason}</p>
-                      </div>
-                    ))}
-                  </div>
+            <div className="glass grid grid-cols-4 gap-6 rounded-xl px-5 py-3.5">
+              {[
+                ['Short by', `${result.shortfall} units`,
+                 order?.component_name ?? 'component'],
+                ['Deadline in', hrs(result.hours_left),
+                 order?.oem_customer ? `for ${order.oem_customer}` : ''],
+                ['Budget left', inr(result.budget_left),
+                 `spends over ${inr(result.approval_threshold)} need a human`],
+                ['Options costed', `${result.options?.length ?? 0}`,
+                 `${result.rejections?.length ?? 0} suppliers refused`],
+              ].map(([k, v, s]) => (
+                <div key={k} className="min-w-0">
+                  <div className="text-muted-foreground text-[9.5px] font-medium
+                                  tracking-[0.12em] uppercase">{k}</div>
+                  <div className="mt-0.5 font-mono text-[19px] leading-none tabular-nums">{v}</div>
+                  {s && <div className="text-muted-foreground mt-1 truncate text-[10.5px]">{s}</div>}
                 </div>
-              )}
+              ))}
+            </div>
+          )}
 
-              <div>
-                <h3 className="mb-1.5 text-[10px] tracking-widest text-muted-foreground uppercase">
-                  Ranked options
+          {/* ---------------------------------------------------- what-if */}
+          {result?.suppliers_in_play?.length > 0 && (
+            <div>
+              <div className="mb-1.5 flex items-center gap-2">
+                <h3 className="text-muted-foreground flex items-center gap-1.5 text-[10px]
+                               font-medium tracking-[0.14em] uppercase">
+                  <FlaskConical className="size-3" />What if a supplier fails?
                 </h3>
-                <div className="flex flex-col gap-1.5">
-                  {result.options.map((o, i) => (
-                    <div key={i} className={`rounded-md border px-3 py-2
-                      ${i === 0 ? 'border-ok/50 bg-ok/5' : 'bg-card'}`}>
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          {i === 0 && (
-                            <Badge variant="outline" className="gap-0.5 border-ok/50 bg-ok/15 text-ok">
-                              <Check className="size-2.5" />chosen
-                            </Badge>
-                          )}
-                          <span className="text-sm">{o.label}</span>
-                          <Badge variant="outline" className="font-mono text-[10px]">{o.kind}</Badge>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {o.requires_approval && (
-                            <Badge variant="outline" className="border-warn/50 bg-warn/15 text-warn">approval</Badge>
-                          )}
-                          <span className="font-mono text-sm tabular-nums">{o.score.toFixed(3)}</span>
-                        </div>
-                      </div>
-                      <p className="mt-1 text-[11px] text-muted-foreground">{o.rationale}</p>
-                      <div className="mt-2 grid grid-cols-3 gap-3">
-                        <Metric label="continuity" value={o.continuity} tone="bg-ok" />
-                        <Metric label="cost" value={o.cost_score} tone="bg-info" />
-                        <Metric label="risk" value={o.risk_score} tone="bg-primary" />
-                      </div>
-                      {o.lines?.length > 0 && (
-                        <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                          {o.lines.map((l, j) => (
-                            <Badge key={j} variant="outline" className="font-mono text-[10px]">
-                              {l.supplier_id} · {l.quantity}u · {l.mode} · {inr(l.total_cost)}
-                            </Badge>
-                          ))}
-                          <span className="ml-auto font-mono text-[11px]">{inr(o.total_cost)}</span>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                <span className="text-muted-foreground/70 text-[10.5px]">
+                  click to knock one out — the whole plan re-forms
+                </span>
+                {simulating && (
+                  <Button variant="ghost" size="sm" className="ml-auto h-6 gap-1 px-2 text-[11px]"
+                          onClick={() => setFailed([])}>
+                    <RotateCcw className="size-3" />reset
+                  </Button>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {result.suppliers_in_play.map((s) => {
+                  const dead = failed.includes(s.id)
+                  const used = (baseChosen?.lines ?? []).some((l) => l.supplier_id === s.id)
+                  return (
+                    <button key={s.id} onClick={() => toggle(s.id)}
+                      className={`rounded-md border px-2 py-1 text-[11px] transition-colors
+                        ${dead
+                          ? 'border-danger/50 bg-danger/15 text-danger line-through'
+                          : used
+                            ? 'border-primary/45 bg-primary/10 text-primary hover:bg-primary/20'
+                            : 'text-muted-foreground hover:bg-accent'}`}>
+                      {s.name}
+                      {used && !dead && <span className="ml-1 opacity-70">· in plan</span>}
+                    </button>
+                  )
+                })}
               </div>
             </div>
           )}
+
+          <AnimatePresence>
+            {simulating && result && (
+              <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0 }}
+                          className={`flex items-start gap-2 rounded-lg border px-3 py-2
+                            text-[12px] leading-relaxed ${planChanged
+                              ? 'border-warn/40 bg-warn/10' : 'border-ok/40 bg-ok/10'}`}>
+                <TriangleAlert className={`mt-0.5 size-3.5 shrink-0
+                  ${planChanged ? 'text-warn' : 'text-ok'}`} />
+                <span>
+                  <b>Simulation.</b>{' '}
+                  {result.excluded?.length
+                    ? `${result.excluded.join(', ')} removed from the pool. `
+                    : ''}
+                  {result.chosen
+                    ? planChanged
+                      ? <>The plan changes to <b>{result.chosen.label}</b>
+                        {baseChosen && <> — {inr(result.chosen.total_cost - baseChosen.total_cost)} more
+                          than the real plan.</>}</>
+                      : <>The plan holds: <b>{result.chosen.label}</b> is still the best option.</>
+                    : <>There is <b>no viable recovery</b> without them. The line stops.</>}
+                  {' '}Nothing here is recorded.
+                </span>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* --------------------------------------------- comparison matrix */}
+          {options.length > 0 && (
+            <div className="overflow-x-auto rounded-xl border">
+              <table className="w-full border-collapse">
+                <thead>
+                  <tr>
+                    <th className="w-[132px] px-4 py-2.5" />
+                    {options.map((o, i) => (
+                      <th key={i} className={`min-w-[168px] px-3 py-2.5 text-left align-bottom
+                        ${i === 0 ? 'bg-primary/[0.08]' : ''}`}>
+                        {i === 0 && (
+                          <Badge variant="outline"
+                                 className="border-primary/50 bg-primary/15 text-primary mb-1
+                                            gap-0.5 text-[9.5px]">
+                            <Check className="size-2.5" />what the agent does
+                          </Badge>
+                        )}
+                        <div className="text-[12.5px] leading-tight font-semibold">{o.label}</div>
+                        <div className="text-muted-foreground mt-0.5 text-[10px]">
+                          {KIND[o.kind] ?? o.kind}
+                        </div>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  <Row label="Weighted score" hint="35/20/15 — the judges' formula"
+                       chosenIndex={0}
+                       cells={options.map((o, i) => (
+                         <span className={`font-mono text-[15px] tabular-nums
+                           ${i === 0 ? 'text-primary font-semibold' : ''}`}>
+                           {o.score.toFixed(3)}
+                           {i === 0 && <Delta now={o.score} was={baseChosen?.score} kind="score" />}
+                         </span>
+                       ))} />
+
+                  <Row label="Units covered" hint={`need ${result?.shortfall ?? 0}`}
+                       chosenIndex={0}
+                       cells={options.map((o) => (
+                         <span className={`font-mono tabular-nums ${
+                           o.units_covered >= (result?.shortfall ?? 0)
+                             ? '' : 'text-danger'}`}>
+                           {o.units_covered}
+                         </span>
+                       ))} />
+
+                  <Row label="Arrives in" hint="deadline is the bar" chosenIndex={0}
+                       cells={options.map((o, i) => {
+                         const late = o.arrival_hours != null &&
+                           result?.hours_left != null && o.arrival_hours > result.hours_left
+                         return (
+                           <span className={`inline-flex items-center gap-1 font-mono tabular-nums
+                             ${o.arrival_hours == null || late ? 'text-danger' : 'text-ok'}`}>
+                             <Clock className="size-3" />{hrs(o.arrival_hours)}
+                             {late && <span className="text-[10px]">late</span>}
+                             {i === 0 && <Delta now={o.arrival_hours}
+                                                was={baseChosen?.arrival_hours} kind="hours" />}
+                           </span>
+                         )
+                       })} />
+
+                  <Row label="Total cost" chosenIndex={0}
+                       cells={options.map((o, i) => (
+                         <span className="font-mono tabular-nums">
+                           {o.total_cost ? inr(o.total_cost) : '—'}
+                           {i === 0 && <Delta now={o.total_cost} was={baseChosen?.total_cost} />}
+                         </span>
+                       ))} />
+
+                  <Row label="Continuity" hint="weight 0.35" chosenIndex={0}
+                       cells={options.map((o) => <Bar value={o.continuity} tone="bg-ok" />)} />
+                  <Row label="Cost efficiency" hint="weight 0.20" chosenIndex={0}
+                       cells={options.map((o) => <Bar value={o.cost_score} tone="bg-info" />)} />
+                  <Row label="Supplier risk" hint="weight 0.15" chosenIndex={0}
+                       cells={options.map((o) => <Bar value={o.risk_score} tone="bg-primary" />)} />
+
+                  <Row label="Authority" chosenIndex={0}
+                       cells={options.map((o) => (
+                         o.requires_approval
+                           ? <Badge variant="outline"
+                                    className="border-warn/50 bg-warn/15 text-warn text-[10px]">
+                               needs a human
+                             </Badge>
+                           : <span className="text-muted-foreground text-[11px]">agent can act</span>
+                       ))} />
+
+                  <Row label="Who supplies it" chosenIndex={0}
+                       cells={options.map((o) => (
+                         o.lines?.length
+                           ? <div className="flex flex-col gap-1">
+                               {o.lines.map((l, j) => (
+                                 <div key={j} className="text-[11px] leading-tight">
+                                   <span className="font-medium">{l.supplier_name}</span>
+                                   <span className="text-muted-foreground">
+                                     {' '}· {l.quantity}u · {l.mode} · {inr(l.total_cost)}
+                                   </span>
+                                 </div>
+                               ))}
+                             </div>
+                           : <span className="text-muted-foreground text-[11px]">nobody</span>
+                       ))} />
+
+                  <Row label="Reasoning" chosenIndex={0}
+                       cells={options.map((o) => (
+                         <p className="text-muted-foreground max-w-[220px] text-[11px]
+                                       leading-relaxed">{o.rationale}</p>
+                       ))} />
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {result && options.length === 0 && !loading && (
+            <p className="text-muted-foreground text-[12.5px]">
+              {result.note ?? 'No option covers this shortfall — every supplier was refused.'}
+            </p>
+          )}
+
+          {/* ------------------------------------------------- the refusals */}
+          {result?.rejections?.length > 0 && (
+            <div>
+              <button onClick={() => setShowRejects(!showRejects)}
+                      className="text-muted-foreground hover:text-foreground mb-1.5 flex
+                                 items-center gap-1.5 text-[10px] font-medium
+                                 tracking-[0.14em] uppercase">
+                <Ban className="size-3" />
+                Considered and refused ({result.rejections.length})
+                <ChevronDown className={`size-3 transition-transform
+                  ${showRejects ? '' : '-rotate-90'}`} />
+              </button>
+              <AnimatePresence initial={false}>
+                {showRejects && (
+                  <motion.div initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: 'auto', opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {result.rejections.map((r, i) => (
+                        <div key={i} className="rounded-lg border px-2.5 py-2">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate text-[12px] font-medium">
+                              {r.supplier_name ?? r.supplier_id}
+                            </span>
+                            <Badge variant="outline"
+                                   className="border-danger/45 bg-danger/12 text-danger ml-auto
+                                              shrink-0 text-[9.5px]">
+                              {CONSTRAINT[r.constraint] ?? r.constraint}
+                            </Badge>
+                          </div>
+                          <p className="text-muted-foreground mt-1 text-[11px] leading-relaxed">
+                            {r.human_reason}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
+
+          <Separator />
+          <p className="text-muted-foreground/70 text-[10.5px] leading-relaxed">
+            Nothing on this screen is generated by a language model. Options are enumerated,
+            filtered against hard constraints, and scored by the same weights the rubric uses —
+            so the same input always produces the same decision.
+          </p>
         </div>
       </ScrollArea>
     </div>

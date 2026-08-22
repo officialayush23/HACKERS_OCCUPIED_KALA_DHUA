@@ -240,18 +240,56 @@ WAREHOUSE       Inventory · Tasks · Inbound
 
 ---
 
-## T8 — MapLibre + OpenStreetMap
+## T8 — Geography  ✅ done
 
-- [ ] Replace the projection SVG with MapLibre GL
-- [ ] Markers: 🏭 plant · 🟢 supplier · 🔵 shipment · 🔴 disruption · 🟣 alternate
-- [ ] Animated shipment position along route
-- [ ] **Deterministic movement, never random GPS.** Position is a function of simulated
-      elapsed time over the route.
-- [ ] `shipment_positions` table (lat, lng, recorded_at, source)
-- [ ] Contradiction is geographic: supplier says in-transit, GPS shows no movement
+Mapbox GL, not MapLibre — the user supplied a Mapbox token, and Mapbox's own tile CDN is
+one less thing to go wrong on conference wifi.
 
-> ⚠️ Conference wifi risk. Cache the style JSON locally and keep the current SVG projection
-> as an automatic fallback if tiles fail to load. Do not let the map take the demo down.
+**The schematic stays the default.** Real geography is a second opinion, not the primary
+view: an operator reading lanes does not need coastlines, and the SVG projection renders
+instantly with no network at all.
+
+- [x] `NetworkFlow.jsx` — SVG projection with rich hover detail on every node, lane and
+      shipment (supplier trust, fastest lane, contradiction count, transport modes,
+      components supplied, active shipments and their value)
+- [x] `MapView.jsx` — Mapbox GL, **Live Network screen only**, behind a Schematic/Geography
+      toggle
+- [x] Lazy chunk: the ~800 kB map engine never enters the main bundle, and only loads if
+      someone actually opens the map
+- [x] Automatic fallback to the schematic when the token is missing, the chunk fails, or
+      tiles are unreachable — with a quiet note saying why
+- [x] Quadratic-bezier lane arcs, tone-coded by state, red ping on contradicted suppliers
+- [x] Mapbox layout CSS inlined in `index.css` so the map does not depend on the vendor
+      stylesheet resolving
+- [ ] Animated shipment position along the route (deterministic: position is a function of
+      simulated elapsed time, never random GPS)
+- [ ] `shipment_positions` table wired to the map
+- [ ] Geographic contradiction: supplier says in-transit, GPS shows no movement
+
+> Conference wifi risk is handled by construction — if tiles fail the schematic takes over
+> automatically and the demo continues. The map can never take the demo down.
+
+---
+
+## T8b — Decision Explorer v2  ✅ done
+
+- [x] Production-run picker (names and OEM customers, not typed `PROD-882`) — opens on the run
+      in the most trouble
+- [x] **Comparison matrix**: every costed option as a column, criteria as rows — weighted score,
+      units covered, arrival vs deadline, total cost, the three rubric sub-scores, authority,
+      who supplies it, and the reasoning
+- [x] Refusals are first-class: "considered and refused" with the human reason per supplier
+- [x] **What-if**: click a supplier to knock it out. `exclude` removes it from the candidate pool
+      *before* scoring, so the plan re-forms around the loss — split-sourcing re-plans instead of
+      a row simply disappearing
+- [x] Deltas against the real plan (cost, arrival, score), coloured by whether they hurt
+- [x] Simulations never write to the audit log (`record` is ignored when `exclude` is set)
+- [x] Backend: `solve_for_production_order(..., exclude=[...])`, `GET /api/solve/{id}?exclude=A,B`,
+      response gains `suppliers_in_play` and `excluded`
+
+Verified against the solver directly: knocking out the chosen supplier re-plans onto the next
+viable one; knocking out both viable ones correctly returns **Do nothing — the line stops**,
+rather than inventing a recovery.
 
 ---
 

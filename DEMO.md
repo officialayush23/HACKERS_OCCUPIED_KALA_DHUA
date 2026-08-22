@@ -83,9 +83,11 @@ and pulsing, with the contradiction called out.
 
 ### 2:30 — Decision Explorer. **This is the money screen.**
 
-Click **Decision Explorer** → **+ audit**.
+Click **Decision Explorer**. Pick the production run at the top — it opens on the one in the
+most trouble. Every option the solver costed is a column; every criterion is a row. The chosen
+column is the lit one.
 
-Point at *"Rejected — and why"*:
+Point at *"Considered and refused"*:
 
 ```
 SUP-18  certification   Budget Semicon Traders lacks AEC-Q100.
@@ -99,6 +101,21 @@ Say — and this is the sentence that wins the round:
 > or a forced 1000-unit buy. **Ours refuses, and it tells you exactly which rule stopped it.**
 > That's not the model being clever. That's deterministic Python. It cannot violate a constraint,
 > because the constraint is a filter, not a prompt."
+
+### 3:10 — The what-if. "What happens when the plan we just made falls apart?"
+
+Still on the Decision Explorer. Click the supplier chip marked **in plan**.
+
+> "I have just told the system that supplier no longer exists. Watch — it does not grey out a
+> row. It re-runs the whole solve with them removed from the pool, and the plan re-forms."
+
+The banner names the new plan and the extra cost. Then kill the second viable supplier too:
+
+> "Now there is no recovery. It says so. It does not invent one — it tells me the line stops.
+> An agent that cannot say *I have nothing* is an agent you cannot trust when it says *I have this*."
+
+Nothing in the what-if is recorded. Say that out loud — it is a sandbox, and the audit log stays
+a record of what actually happened.
 
 ### 3:30 — Hazmat. "Some options aren't expensive. They're illegal."
 
@@ -148,8 +165,10 @@ Click **Self-Scoring**.
 
 ## Known gaps — say these before a judge finds them
 
-- The LangGraph agent loop is next; today the recovery is triggered from the Decision Explorer.
-- Supplier email replies are scripted, not generated.
-- The approval workflow writes the brief but the resume-on-approve path isn't wired to the UI yet.
+- Supplier replies are scripted personas, not a real inbox. The problem statement asks for a
+  simulated sandbox and warns against wiring real supplier or ERP accounts — so we did not.
+- Shipments do not yet animate along their route on the map; position is a static ETA.
+- The supplier learning loop (promised vs actual reliability feeding back into scoring) is
+  designed and specced, not built.
 
 Being straight about this reads far better than being caught.

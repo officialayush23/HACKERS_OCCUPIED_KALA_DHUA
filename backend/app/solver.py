@@ -329,7 +329,16 @@ select po.id as production_order_id,
 """
 
 
-async def solve_for_production_order(conn, production_order_id: str) -> dict[str, Any]:
+async def solve_for_production_order(
+    conn, production_order_id: str, *, exclude: list[str] | None = None,
+) -> dict[str, Any]:
+    """Plan the recovery for one production order.
+
+    `exclude` removes suppliers from the candidate pool *before* anything is
+    scored, so a what-if re-plans around the loss rather than just deleting the
+    winning row. That is the difference between "your best option is gone" and
+    "here is what I would do instead."
+    """
     need = await conn.fetchrow(NEED_SQL, production_order_id)
     if need is None:
         raise ValueError(f"unknown production order {production_order_id}")
@@ -337,10 +346,15 @@ async def solve_for_production_order(conn, production_order_id: str) -> dict[str
     shortfall = int(need["required_units"] - need["usable_stock"] + need["safety_stock"])
     if shortfall <= 0:
         return {"shortfall": shortfall, "chosen": None, "options": [], "rejections": [],
+                "suppliers_in_play": [], "excluded": [],
                 "hours_left": round(hours_between(need["deadline"], CLOCK.now()), 2),
                 "note": "No shortfall — usable stock covers the run."}
 
     rows = await conn.fetch(CANDIDATE_SQL, need["component_id"], need["warehouse_id"])
+    in_play = {r["supplier_id"]: r["supplier_name"] for r in rows}
+    dropped = sorted(set(exclude or []) & set(in_play))
+    if dropped:
+        rows = [r for r in rows if r["supplier_id"] not in set(exclude or [])]
     spent = float(await conn.fetchval(
         "select coalesce(sum(total_value),0) from purchase_orders where created_by_agent") or 0)
 
@@ -354,6 +368,8 @@ async def solve_for_production_order(conn, production_order_id: str) -> dict[str
         baseline_unit_price=float(need["baseline_unit_price"]),
         budget_spent=spent,
     )
+    result["suppliers_in_play"] = [{"id": k, "name": v} for k, v in sorted(in_play.items())]
+    result["excluded"] = dropped
     result["context"] = {
         "production_order_id": production_order_id,
         "component_id": need["component_id"],
