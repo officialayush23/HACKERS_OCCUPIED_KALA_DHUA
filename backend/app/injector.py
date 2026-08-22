@@ -48,6 +48,19 @@ async def _ensure_incident(conn, *, itype: str, component_id: str | None,
     return iid
 
 
+async def _react(conn, component_id: str | None, trigger: str,
+                 po_id: str | None = None) -> None:
+    """Hand the event to the reactive controller. No human clicks anything."""
+    if not component_id:
+        return
+    from . import agent                      # local import: avoids a cycle
+    try:
+        await agent.wake(conn, component_id=component_id, trigger=trigger, po_id=po_id)
+    except Exception as exc:                 # noqa: BLE001 - never break injection
+        await emit(conn, actor="risk_detector", event_type="AGENT_WAKE_FAILED",
+                   human_summary=f"Reactive controller error: {exc}", payload={})
+
+
 async def apply_event(conn, etype: str, params: dict[str, Any],
                       incident_id: str | None = None) -> dict[str, Any]:
     """Apply one disruption event. Returns {incident_id, summary}."""
@@ -87,6 +100,7 @@ async def apply_event(conn, etype: str, params: dict[str, Any],
         await emit(conn, incident_id=iid, actor="injector",
                    event_type="DISRUPTION_INJECTED", human_summary=summary,
                    payload={"event": etype, **params, "component_id": po["component_id"]})
+        await _react(conn, po["component_id"], f"supplier delay on {po_id}", po_id)
         return {"incident_id": iid, "summary": summary}
 
     if etype == "inventory_correction":
@@ -106,6 +120,7 @@ async def apply_event(conn, etype: str, params: dict[str, Any],
                    payload={"component_id": cid, "erp_stock": prev["erp_stock"],
                             "usable_stock": usable,
                             "previous_usable": prev["usable_stock"]})
+        await _react(conn, cid, "warehouse inventory correction")
         return {"incident_id": iid, "summary": summary}
 
     if etype == "supplier_claim":
@@ -162,6 +177,9 @@ async def apply_event(conn, etype: str, params: dict[str, Any],
                                 "supplier_claim": row["supplier_claim"],
                                 "tracking_status": status,
                                 "reliability_penalty": 0.25})
+            comp_id = await conn.fetchval(
+                "select component_id from purchase_orders where id=$1", po_id)
+            await _react(conn, comp_id, "supplier claim contradicted by carrier", po_id)
         else:
             summary = f"Tracking for {po_id} is now '{status}'."
             await emit(conn, incident_id=iid, actor="injector",
@@ -182,6 +200,7 @@ async def apply_event(conn, etype: str, params: dict[str, Any],
         await emit(conn, incident_id=iid, actor="injector", event_type="DEMAND_SPIKE",
                    human_summary=summary,
                    payload={"component_id": cid, "previous": prev, "current": usage})
+        await _react(conn, cid, "demand spike")
         return {"incident_id": iid, "summary": summary}
 
     if etype == "priority_change":
@@ -195,6 +214,7 @@ async def apply_event(conn, etype: str, params: dict[str, Any],
         summary = f"{pid} priority raised to {pr}."
         await emit(conn, incident_id=iid, actor="injector", event_type="PRIORITY_CHANGED",
                    human_summary=summary, payload={"production_order_id": pid, "priority": pr})
+        await _react(conn, comp, "production priority change")
         return {"incident_id": iid, "summary": summary}
 
     if etype == "deadline_pull_in":
@@ -213,6 +233,7 @@ async def apply_event(conn, etype: str, params: dict[str, Any],
                    human_summary=summary,
                    payload={"production_order_id": pid, "hours_from_now": hours,
                             "new_deadline": new_deadline.isoformat()})
+        await _react(conn, comp, "production deadline pulled in")
         return {"incident_id": iid, "summary": summary}
 
     if etype == "quality_failure":
@@ -256,6 +277,7 @@ async def apply_event(conn, etype: str, params: dict[str, Any],
                    event_type="HAZMAT_SUPPLY_FAILURE", human_summary=summary,
                    payload={"po_id": po_id, "component_id": po["component_id"],
                             "constraint": "HAZMAT_NO_AIR"})
+        await _react(conn, po["component_id"], "hazmat supply failure", po_id)
         return {"incident_id": iid, "summary": summary}
 
     raise ValueError(f"unknown event type '{etype}'")

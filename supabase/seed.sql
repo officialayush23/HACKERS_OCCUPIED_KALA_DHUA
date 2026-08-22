@@ -179,3 +179,48 @@ update suppliers set lat= 5.4141, lng=100.3288 where id='SUP-95';
 update suppliers set lat=22.5431, lng=114.0579 where id='SUP-29';
 update suppliers set lat=18.5089, lng=73.8553  where id='SUP-77';
 update suppliers set lat=13.0827, lng=80.2707  where id='SUP-103';
+
+-- ---------- business naming (survives reset) --------------------------------
+insert into organizations (id,name,industry,city,country) values
+  ('NEXA','NEXA Mobility Systems Pvt. Ltd.','Automotive Electronics (Tier-1)','Pune','India')
+  on conflict (id) do nothing;
+insert into product_families (id,name,organization_id) values
+  ('PF-EVP','EV Power Electronics','NEXA'),('PF-TEL','Telematics & Displays','NEXA')
+  on conflict (id) do nothing;
+insert into products (id,name,family_id,sku,oem_customer) values
+  ('PRD-DRIVE','EV Drive Controller','PF-EVP','NX-DC-400','Bharat EV Motors'),
+  ('PRD-BMS','Battery Management System','PF-EVP','NX-BMS-220','Bharat EV Motors'),
+  ('PRD-TELE','Telematics Unit','PF-TEL','NX-TU-110','Shakti Auto'),
+  ('PRD-CLUSTER','Instrument Cluster','PF-TEL','NX-IC-090','Shakti Auto')
+  on conflict (id) do nothing;
+
+update components set display_name='Motor Driver IC',     part_number='MDIC-7701', category='Power Electronics'   where id='COMP-104';
+update components set display_name='Li-ion Cell Module',  part_number='LICM-2240', category='Energy Storage'      where id='COMP-207';
+update components set display_name='Wiring Harness',      part_number='WH-3310',   category='Interconnect'        where id='COMP-311';
+update components set display_name='Microcontroller MCU', part_number='MCU-8802',  category='Compute'             where id='COMP-402';
+update components set display_name='Connector Set',       part_number='CS-1180',   category='Interconnect'        where id='COMP-118';
+update components set display_name='TFT Display Panel',   part_number='TFT-5200',  category='Human Machine Iface' where id='COMP-520';
+
+update suppliers set legal_name='Zhen Hua Electronics Co., Ltd.',   facility_name='Shenzhen Bao an Plant' where id='SUP-21';
+update suppliers set legal_name='Western Components Ltd',           facility_name='Chennai Ambattur Works' where id='SUP-42';
+update suppliers set legal_name='Budget Semicon Traders',           facility_name='Shenzhen Trading Hub' where id='SUP-18';
+update suppliers set legal_name='Deccan Rapid Supply Pvt. Ltd.',    facility_name='Pune Bhosari Unit' where id='SUP-33';
+update suppliers set legal_name='Formosa Precision Corp.',          facility_name='Taipei Neihu Fab' where id='SUP-57';
+update suppliers set legal_name='Bharat Bulk Components Pvt. Ltd.', facility_name='Chennai Sriperumbudur' where id='SUP-64';
+update suppliers set legal_name='AeroCell Logistics Pte. Ltd.',     facility_name='Singapore Jurong' where id='SUP-71';
+update suppliers set legal_name='Konkan Energy Systems Pvt. Ltd.',  facility_name='Mumbai Taloja Plant' where id='SUP-88';
+update suppliers set legal_name='Nexus Micro Sdn. Bhd.',            facility_name='Penang Bayan Lepas' where id='SUP-95';
+update suppliers set legal_name='Lowcost Display Co.',              facility_name='Shenzhen Longgang' where id='SUP-29';
+update suppliers set legal_name='Sahyadri Harness Works',           facility_name='Pune Chakan Unit 2' where id='SUP-77';
+update suppliers set legal_name='Coastal Connectors Pvt. Ltd.',     facility_name='Chennai Port Estate' where id='SUP-103';
+
+insert into bill_of_materials (product_id,component_id,quantity_per_unit) values
+  ('PRD-DRIVE','COMP-104',1),('PRD-DRIVE','COMP-118',3),('PRD-DRIVE','COMP-402',1),
+  ('PRD-BMS','COMP-207',1),('PRD-BMS','COMP-311',2),
+  ('PRD-TELE','COMP-402',1),('PRD-CLUSTER','COMP-520',1) on conflict do nothing;
+
+update production_orders set product_id='PRD-DRIVE',   oem_customer='Bharat EV Motors' where id in ('PROD-882','PROD-884');
+update production_orders set product_id='PRD-BMS',     oem_customer='Bharat EV Motors' where id in ('PROD-883','PROD-887');
+update production_orders set product_id='PRD-TELE',    oem_customer='Shakti Auto'      where id='PROD-885';
+update production_orders set product_id='PRD-CLUSTER', oem_customer='Shakti Auto'      where id='PROD-886';
+update warehouses set organization_id='NEXA';
