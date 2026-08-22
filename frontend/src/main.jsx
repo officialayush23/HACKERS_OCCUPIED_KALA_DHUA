@@ -11,8 +11,22 @@ try {
   document.documentElement.style.colorScheme = t
 } catch { document.documentElement.classList.add('dark') }
 
+// Sockets are the fast path, not the only path. A dropped WebSocket used to
+// mean panes sat on whatever they last fetched, with nothing on screen saying
+// so — which is indistinguishable from a broken backend. A short poll is the
+// floor underneath the socket: nothing on this dashboard can be more than a
+// few seconds behind the database, socket or no socket.
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { staleTime: 2000, refetchOnWindowFocus: false } },
+  defaultOptions: {
+    queries: {
+      staleTime: 0,
+      gcTime: 60_000,
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true,
+      refetchInterval: 4000,
+      refetchIntervalInBackground: false,
+    },
+  },
 })
 
 createRoot(document.getElementById('root')).render(

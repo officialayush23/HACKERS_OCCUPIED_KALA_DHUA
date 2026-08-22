@@ -15,20 +15,7 @@ import {
 } from '@/components/ui/drawer'
 import ScenarioForm from '@/components/ScenarioForm'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
-
-const EXAMPLE = `[
-  { "at_h": 0,  "type": "supplier_delay",
-    "params": { "po_id": "PO-7712", "delay_days": 6 } },
-  { "at_h": 8,  "type": "demand_spike",
-    "params": { "component_id": "COMP-104", "daily_usage": 200 },
-    "note": "an OEM pulls a bigger order forward" },
-  { "at_h": 12, "type": "supplier_claim",
-    "params": { "po_id": "PO-7712", "claim": "dispatched" } },
-  { "at_h": 13, "type": "tracking_state",
-    "params": { "po_id": "PO-7712", "tracking_status": "not_shipped" } }
-]`
 
 /** Write your own disruption. Same event types, same execution path. */
 function CustomTab({ onDone }) {
@@ -50,7 +37,7 @@ function CustomTab({ onDone }) {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid gap-4 sm:grid-cols-2">
         <label className="flex flex-col gap-1.5">
           <span className="text-muted-foreground text-[10px] font-medium
                            tracking-[0.12em] uppercase">Name this test</span>
@@ -76,7 +63,7 @@ function CustomTab({ onDone }) {
         </div>
       )}
 
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <Button size="lg" disabled={add.isPending || !events.length || incomplete}
                 onClick={() => add.mutate({
                   name: name || 'Custom test', tests: tests || undefined,
@@ -99,13 +86,14 @@ function CustomTab({ onDone }) {
 /**
  * Run a simulation.
  *
- * This replaces a raw JSON textarea that produced a 400 whenever anyone typed
- * anything slightly wrong — which is every time, under demo pressure. A
- * scenario is now a thing you pick and can read: what it feeds in, in what
- * order, and what it is testing about the agent.
- *
- * Nothing here is hidden. Judges should be able to see the exact inputs and
- * satisfy themselves that the agent is not being told the answer.
+ * Layout note, because this broke once and the failure was invisible in code
+ * review: `DrawerContent` ships with `h-auto`. A percentage or `flex-1` height
+ * inside an auto-height column has nothing to resolve against, so the
+ * ScrollArea collapses, the content renders at its natural height, and the
+ * footer draws straight through the list above it. The fix is a *definite*
+ * height on the content element and an unbroken `min-h-0` chain from there
+ * down to the scroll viewport. Header and footer are `shrink-0` siblings of
+ * the scrolling region — never overlays.
  */
 export default function SimulationDrawer({ open, onOpenChange }) {
   const qc = useQueryClient()
@@ -119,7 +107,11 @@ export default function SimulationDrawer({ open, onOpenChange }) {
   const done = () => { setError(null); refresh(qc, 'simulation') }
   const fail = (e) => setError(e.message)
 
-  const run = useMutation({ mutationFn: api.inject, onSuccess: done, onError: fail })
+  const run = useMutation({
+    mutationFn: api.inject,
+    onSuccess: () => { done(); onOpenChange(false) },
+    onError: fail,
+  })
   const reset = useMutation({ mutationFn: api.reset, onSuccess: done, onError: fail })
   // A clean backend behind a stale React cache still shows ghosts, so the hard
   // reset clears both.
@@ -143,176 +135,179 @@ export default function SimulationDrawer({ open, onOpenChange }) {
 
   return (
     <Drawer open={open} onOpenChange={onOpenChange}>
-      <DrawerContent className="flex max-h-[92vh] flex-col gap-0 p-0">
-       <div className="mx-auto flex w-full max-w-5xl min-h-0 flex-1 flex-col">
-        <DrawerHeader className="gap-2 border-b px-7 py-6">
-          <DrawerTitle className="flex items-center gap-2.5 text-[18px]">
-            <FlaskConical className="text-primary size-4.5" />Run a simulation
-          </DrawerTitle>
-          <DrawerDescription className="text-[13px] leading-relaxed">
-            Each scenario feeds real events into the world on a simulated clock —
-            one second of real time is one hour of plant time. The agent is never
-            told which scenario is running, or what it is meant to conclude.
-          </DrawerDescription>
-        </DrawerHeader>
+      {/* definite height — everything below depends on it */}
+      <DrawerContent className="h-[86vh] max-h-[86vh]">
+        <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col overflow-hidden">
 
-        <Tabs defaultValue="built-in" className="flex min-h-0 flex-1 flex-col gap-0">
-          <TabsList className="mx-7 mt-5 w-auto self-start">
-            <TabsTrigger value="built-in" className="text-[12.5px]">Built-in</TabsTrigger>
-            <TabsTrigger value="custom" className="text-[12.5px]">Write your own</TabsTrigger>
-          </TabsList>
+          <DrawerHeader className="shrink-0 gap-2 border-b px-7 py-5 text-left">
+            <DrawerTitle className="flex items-center gap-2.5 text-[18px]">
+              <FlaskConical className="text-primary size-4.5" />Run a simulation
+            </DrawerTitle>
+            <DrawerDescription className="max-w-2xl text-[13px] leading-relaxed">
+              Each scenario feeds real events into the world on a simulated clock —
+              one second of real time is one hour of plant time. The agent is never
+              told which scenario is running, or what it is meant to conclude.
+            </DrawerDescription>
+          </DrawerHeader>
 
-          <TabsContent value="custom" className="min-h-0 flex-1">
-            <ScrollArea className="h-full">
-              <div className="p-7">
-                <CustomTab
-                           onDone={() => { refresh(qc, 'simulation'); onOpenChange(false) }} />
-              </div>
-            </ScrollArea>
-          </TabsContent>
+          <Tabs defaultValue="built-in"
+                className="flex min-h-0 flex-1 flex-col gap-0 overflow-hidden">
+            <TabsList className="mx-7 mt-4 mb-1 w-auto shrink-0 self-start">
+              <TabsTrigger value="built-in" className="text-[12.5px]">Built-in</TabsTrigger>
+              <TabsTrigger value="custom" className="text-[12.5px]">Write your own</TabsTrigger>
+            </TabsList>
 
-          <TabsContent value="built-in" className="min-h-0 flex-1">
-        <ScrollArea className="h-full">
-          <div className="flex flex-col gap-6 p-7">
+            <TabsContent value="built-in"
+                         className="min-h-0 flex-1 overflow-hidden data-inactive:hidden">
+              <ScrollArea className="h-full">
+                <div className="flex flex-col gap-6 px-7 py-6">
 
-            {running.length > 0 && (
-              <div className="border-primary/40 bg-primary/[0.07] flex items-center gap-2.5
-                              rounded-xl border px-4 py-3">
-                <Loader2 className="text-primary size-4 shrink-0 animate-spin" />
-                <span className="text-[13px]">
-                  <b>{running.join(', ')}</b> is running now.
-                </span>
-              </div>
-            )}
-
-            {error && (
-              <div className="border-danger/40 bg-danger/[0.07] text-danger flex items-start
-                              gap-2 rounded-xl border px-4 py-3 text-[12.5px]">
-                <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />{error}
-              </div>
-            )}
-
-            {/* pick one */}
-            <div className="flex flex-col gap-2">
-              {scenarios.map((s) => {
-                const on = selected?.id === s.id
-                const live = running.includes(s.id)
-                return (
-                  <button key={s.id} onClick={() => setPicked(s.id)}
-                    className={`rounded-xl border px-4 py-3.5 text-left transition-colors
-                      ${on ? 'border-primary/50 bg-primary/[0.06]' : 'hover:bg-accent/40'}`}>
-                    <div className="flex items-center gap-2.5">
-                      {on && <Check className="text-primary size-3.5 shrink-0" />}
-                      <span className="text-[14px] font-medium">{s.title}</span>
-                      {live && (
-                        <Badge variant="outline"
-                               className="border-primary/40 bg-primary/10 text-primary ml-auto
-                                          shrink-0 text-[10px]">live</Badge>
-                      )}
+                  {running.length > 0 && (
+                    <div className="border-primary/40 bg-primary/[0.07] flex items-center
+                                    gap-2.5 rounded-xl border px-4 py-3">
+                      <Loader2 className="text-primary size-4 shrink-0 animate-spin" />
+                      <span className="text-[13px]">
+                        <b>{running.join(', ')}</b> is running now.
+                      </span>
                     </div>
-                    <p className="text-muted-foreground mt-1.5 text-[12px] leading-relaxed">
-                      {s.tests}
-                    </p>
-                  </button>
-                )
-              })}
+                  )}
+
+                  {error && (
+                    <div className="border-danger/40 bg-danger/[0.07] text-danger flex
+                                    items-start gap-2 rounded-xl border px-4 py-3 text-[12.5px]">
+                      <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />{error}
+                    </div>
+                  )}
+
+                  {/* pick one */}
+                  <div className="flex flex-col gap-2">
+                    {scenarios.map((s) => {
+                      const on = selected?.id === s.id
+                      const live = running.includes(s.id)
+                      return (
+                        <button key={s.id} onClick={() => setPicked(s.id)}
+                          className={`rounded-xl border px-4 py-3.5 text-left transition-colors
+                            ${on ? 'border-primary/50 bg-primary/[0.06]'
+                                 : 'hover:bg-accent/40'}`}>
+                          <div className="flex items-center gap-2.5">
+                            {on && <Check className="text-primary size-3.5 shrink-0" />}
+                            <span className="text-[14px] font-medium">{s.title}</span>
+                            {live && (
+                              <Badge variant="outline"
+                                     className="border-primary/40 bg-primary/10 text-primary
+                                                ml-auto shrink-0 text-[10px]">live</Badge>
+                            )}
+                          </div>
+                          <p className="text-muted-foreground mt-1.5 text-[12px] leading-relaxed">
+                            {s.tests}
+                          </p>
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  {/* what it feeds in */}
+                  <AnimatePresence mode="wait">
+                    {selFeed.length > 0 && (
+                      <motion.div key={selId}
+                                  initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
+                                  exit={{ opacity: 0 }}>
+                        <Separator className="mb-6" />
+                        <h3 className="text-muted-foreground text-[10px] font-medium
+                                       tracking-[0.14em] uppercase">
+                          What gets fed in
+                        </h3>
+                        <p className="text-muted-foreground mt-2 text-[12px] leading-relaxed">
+                          {selCount} event{selCount > 1 ? 's' : ''} over{' '}
+                          {selSpan} simulated hours.
+                        </p>
+
+                        <ol className="mt-4 flex flex-col gap-3.5">
+                          {selFeed.map((f, i) => (
+                            <li key={i} className="flex gap-3">
+                              <span className="text-muted-foreground w-10 shrink-0 pt-[1px]
+                                               font-mono text-[11px] tabular-nums">
+                                +{f.at_h}h
+                              </span>
+                              <span className="min-w-0">
+                                <span className="block text-[13px] leading-snug">{f.what}</span>
+                                {f.note && (
+                                  <span className="text-muted-foreground block text-[11.5px]
+                                                   leading-relaxed">{f.note}</span>
+                                )}
+                              </span>
+                            </li>
+                          ))}
+                        </ol>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  {/* what the two destructive buttons below actually destroy */}
+                  <Separator />
+                  <div className="text-muted-foreground/70 grid gap-x-6 gap-y-2 text-[11px]
+                                  leading-relaxed sm:grid-cols-2">
+                    <div>
+                      <b className="text-muted-foreground">Reset world</b> — re-seeds
+                      inventory, orders and shipments, and clears the active run. Past runs
+                      and their scores survive, so you keep the comparison you were tuning
+                      against.
+                    </div>
+                    <div>
+                      <b className="text-danger/80">Wipe everything</b> — deletes every run,
+                      incident, decision, message, task, approval and score. Only the
+                      baseline world survives: suppliers, components, plants and policies.
+                    </div>
+                  </div>
+                </div>
+              </ScrollArea>
+            </TabsContent>
+
+            <TabsContent value="custom"
+                         className="min-h-0 flex-1 overflow-hidden data-inactive:hidden">
+              <ScrollArea className="h-full">
+                <div className="px-7 py-6">
+                  <CustomTab onDone={() => { refresh(qc, 'simulation'); onOpenChange(false) }} />
+                </div>
+              </ScrollArea>
+            </TabsContent>
+          </Tabs>
+
+          {/* footer — a sibling of the scroll region, never an overlay */}
+          <div className="bg-popover shrink-0 border-t px-7 py-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <Button size="lg" disabled={!selected || run.isPending}
+                      onClick={() => selected && run.mutate(selected.id)}
+                      className="h-11 flex-1 min-w-[14rem]">
+                {run.isPending ? <Loader2 className="size-4 animate-spin" />
+                               : <Play className="size-4" />}
+                Run{selTitle ? ` “${selTitle}”` : ''}
+              </Button>
+
+              <Button variant="outline" size="lg" disabled={reset.isPending}
+                      onClick={() => reset.mutate('demo')} className="h-11">
+                {reset.isPending ? <Loader2 className="size-4 animate-spin" />
+                                 : <RotateCcw className="size-4" />}
+                Reset world
+              </Button>
+
+              <Button variant="outline" size="lg" disabled={wipe.isPending}
+                      onClick={() => wipe.mutate()}
+                      className="border-danger/40 text-danger hover:bg-danger/10 h-11">
+                {wipe.isPending ? <Loader2 className="size-4 animate-spin" />
+                                : <Trash2 className="size-4" />}
+                Wipe everything
+              </Button>
             </div>
 
-            {/* what it feeds in */}
-            <AnimatePresence mode="wait">
-              {selFeed.length > 0 && (
-                <motion.div key={selId}
-                            initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0 }}>
-                  <Separator className="mb-6" />
-                  <h3 className="text-muted-foreground text-[10px] font-medium
-                                 tracking-[0.14em] uppercase">
-                    What gets fed in
-                  </h3>
-                  <p className="text-muted-foreground mt-2 text-[12px] leading-relaxed">
-                    {selCount} event{selCount > 1 ? 's' : ''} over{' '}
-                    {selSpan} simulated hours.
-                  </p>
-
-                  <ol className="mt-4 flex flex-col gap-3.5">
-                    {selFeed.map((f, i) => (
-                      <li key={i} className="flex gap-3">
-                        <span className="text-muted-foreground w-10 shrink-0 pt-[1px]
-                                         font-mono text-[11px] tabular-nums">
-                          +{f.at_h}h
-                        </span>
-                        <span className="min-w-0">
-                          <span className="block text-[13px] leading-snug">{f.what}</span>
-                          {f.note && (
-                            <span className="text-muted-foreground block text-[11.5px]
-                                             leading-relaxed">{f.note}</span>
-                          )}
-                        </span>
-                      </li>
-                    ))}
-                  </ol>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-        </ScrollArea>
-          </TabsContent>
-        </Tabs>
-
-        {/* three things, and each says exactly what it destroys */}
-        <div className="flex flex-col gap-3 border-t px-7 py-5">
-          <Button size="lg" disabled={!selected || run.isPending}
-                  onClick={() => selected && run.mutate(selected.id)}
-                  className="h-11">
-            {run.isPending ? <Loader2 className="size-4 animate-spin" />
-                           : <Play className="size-4" />}
-            Run{selTitle ? ` \u201c${selTitle}\u201d` : ''}
-          </Button>
-
-          <div className="flex items-center gap-3">
-            <Button variant="outline" size="lg" disabled={reset.isPending}
-                    onClick={() => reset.mutate('demo')} className="h-10 flex-1">
-              {reset.isPending ? <Loader2 className="size-4 animate-spin" />
-                               : <RotateCcw className="size-4" />}
-              Reset world
-            </Button>
-
-            <Button variant="outline" size="lg" disabled={wipe.isPending}
-                    onClick={() => wipe.mutate()}
-                    className="border-danger/40 text-danger hover:bg-danger/10 h-10 flex-1">
-              {wipe.isPending ? <Loader2 className="size-4 animate-spin" />
-                              : <Trash2 className="size-4" />}
-              Wipe everything
-            </Button>
-          </div>
-
-          {wipe.isSuccess && (
-            <div className="border-ok/40 bg-ok/[0.07] rounded-lg border px-3 py-2
-                            text-[12px] leading-relaxed">
-              Everything cleared. No run, no incidents, no decisions, no logs, no score.
-            </div>
-          )}
-        </div>
-
-        <div className="text-muted-foreground/70 grid grid-cols-2 gap-x-5 gap-y-1
-                        px-7 pb-6 text-[11px] leading-relaxed">
-          <div>
-            <b className="text-muted-foreground">Reset world</b> — re-seeds inventory,
-            orders and shipments. Past runs and their scores survive, so you keep the
-            comparison you were tuning against.
-          </div>
-          <div>
-            <b className="text-danger/80">Wipe everything</b> — deletes every run,
-            incident, decision, message, task, approval and score. Only the baseline
-            world survives: suppliers, components, plants and policies.
+            {wipe.isSuccess && (
+              <div className="border-ok/40 bg-ok/[0.07] mt-3 rounded-lg border px-3 py-2
+                              text-[12px] leading-relaxed">
+                Everything cleared. No run, no incidents, no decisions, no logs, no score.
+              </div>
+            )}
           </div>
         </div>
-
-        <p className="text-muted-foreground/70 px-7 pb-5 text-[11px] leading-relaxed">
-          Reset re-seeds inventory, orders and shipments. The audit log and past run scores
-          survive it, so you never lose the comparison you are tuning against.
-        </p>
-       </div>
       </DrawerContent>
     </Drawer>
   )

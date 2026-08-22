@@ -18,6 +18,8 @@ import DecisionLog from '@/components/DecisionLog'
 import Accuracy from '@/components/Accuracy'
 import NoRun from '@/components/NoRun'
 import Evaluation from '@/components/Evaluation'
+import HumanInput from '@/components/HumanInput'
+import AuditPage from '@/components/AuditPage'
 import NowBar from '@/components/NowBar'
 import ActionQueue from '@/components/ActionQueue'
 import AgentStatus from '@/components/AgentStatus'
@@ -100,6 +102,8 @@ const SUBTITLE = {
   comms:     'Supplier, warehouse and carrier conversations',
   scoring:   'Runs scored against the judges\u2019 own formula',
   evaluation:'Did this run pass \u2014 criterion by criterion, with the evidence',
+  questions: 'Decisions the agent refused to make, and why it refused them',
+  auditlog:  'Every event, every actor, every run \u2014 append-only',
   warehouse: 'Physical reality at Pune Plant',
 }
 
@@ -115,8 +119,11 @@ function Overview({ events, revision, onGoto, onRunSim }) {
   // in the same breath.
   // No run means no evidence. The baseline topology is still real, but nothing
   // that claims something happened may render.
-  const hasRun = now?.has_run ?? false
-  const atRisk = (now?.production_at_risk ?? false) && hasRun
+  // Belt and braces. `has_run` is the contract, but an older backend that does
+  // not send the field must not be read as "a run exists" — an undefined field
+  // is not evidence. Anything that claims something happened needs a run id.
+  const hasRun = now?.has_run === true && now?.active_run_id != null
+  const atRisk = hasRun && (now?.production_at_risk ?? false)
   const order = now?.worst ?? null
   const incident = (now?.incidents ?? [])[0] ?? null
   const cover = now?.min_coverage_days ?? null
@@ -262,7 +269,11 @@ export default function App() {
     queryKey: ['warehouse', revision], queryFn: api.warehouse, refetchInterval: 5000 })
   const { data: apr } = useQuery({
     queryKey: ['approvals', revision], queryFn: api.approvals, refetchInterval: 5000 })
-  const { data: llm } = useQuery({ queryKey: ['llm'], queryFn: api.llmHealth })
+  // This one really does hit the model, so it is deliberately exempt from the
+  // global short poll. A liveness badge is not worth a request every 4 seconds.
+  const { data: llm } = useQuery({
+    queryKey: ['llm'], queryFn: api.llmHealth,
+    staleTime: 120_000, refetchInterval: 120_000 })
 
   const criticals = kpi?.critical_incidents ?? 0
   const openTasks = (wh?.tasks ?? []).filter((t) => t.status === 'open').length
@@ -362,6 +373,10 @@ export default function App() {
             {page === 'evaluation' && (
               <Evaluation onRunSim={() => setSimOpen(true)} />
             )}
+
+            {page === 'questions' && <HumanInput />}
+
+            {page === 'auditlog' && <AuditPage />}
           </motion.div>
         </AnimatePresence>
         <CommandBar open={cmdOpen} onOpenChange={setCmdOpen}

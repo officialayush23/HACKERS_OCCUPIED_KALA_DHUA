@@ -58,6 +58,26 @@ export default function NowBar({ onGoto }) {
   const worst = data?.worst ?? null
   // A delivery date behind the simulated clock is overdue, not "in -39 days".
   const overdue = nd && nd.hours_away < 0
+  const hasRun = data?.has_run === true && data?.active_run_id != null
+
+  // "Agent idle · nothing at risk" is a claim about a world that has been
+  // disrupted and found to be fine. With no run it is a different sentence
+  // wearing the same words, and it is the one that made this strip contradict
+  // the page underneath it.
+  if (data && !hasRun) {
+    return (
+      <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
+                  className="glass-panel text-muted-foreground flex shrink-0 items-center
+                             gap-2.5 border-b px-5 py-2.5 text-[12px]">
+        <Bot className="size-3.5 shrink-0" />
+        <span>No test run.</span>
+        <span className="text-muted-foreground/70">
+          The baseline network is loaded. Nothing has happened to it, so there is
+          nothing to report yet.
+        </span>
+      </motion.div>
+    )
+  }
 
   return (
     <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}

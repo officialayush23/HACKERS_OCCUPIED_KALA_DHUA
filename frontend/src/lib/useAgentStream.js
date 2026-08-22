@@ -35,7 +35,13 @@ export function useAgentStream() {
   // denylist rather than a list of keys to remember: the previous version was
   // an allowlist, and every query key added afterwards silently went stale.
   const refresh = useCallback(() => {
-    qc.invalidateQueries({ predicate: (q) => q.queryKey?.[0] !== 'llm' })
+    qc.invalidateQueries({
+      predicate: (q) => q.queryKey?.[0] !== 'llm',
+      // 'active' (the default) leaves a query that is mounted-but-not-rendered
+      // — a page behind a tab, a panel inside a closed drawer — holding stale
+      // data, which is then shown the instant you navigate to it.
+      refetchType: 'all',
+    })
   }, [qc])
 
   const merge = useCallback((incoming) => {

@@ -334,6 +334,11 @@ async def reset(mode: str = "demo"):
         await conn.execute(
             "update scenario_runs set status='reset', finished_at=now() "
             "where status='running'")
+        # The world this run happened in has just been re-seeded, so the run is
+        # no longer a description of anything. Leaving the pointer set is what
+        # made "Reset world" produce a dashboard with a live incident and no
+        # events behind it.
+        await _set_active_run(conn, None)
         await conn.execute(sql)
 
         # Tables that hold no foreign key into the seeded world, and therefore
@@ -436,7 +441,18 @@ async def _active_run_id(conn) -> int | None:
     than zeros. A 0% score with no run is a lie about a thing that never
     happened; `null` is not `0`.
     """
-    return await conn.fetchval("select scenario_run_id from active_run where id")
+    run_id = await conn.fetchval("select scenario_run_id from active_run where id")
+    if run_id is None:
+        return None
+    # Self-healing. A run that was reset away, or deleted, is not an active run,
+    # and a pointer at one is how a wiped world came to render a live incident.
+    # The check is one indexed lookup; correctness here is worth it on every poll.
+    status = await conn.fetchval("select status from scenario_runs where id=$1", run_id)
+    if status is None or status == 'reset':
+        await conn.execute(
+            "update active_run set scenario_run_id=null, updated_at=now() where id")
+        return None
+    return run_id
 
 
 async def _set_active_run(conn, run_id: int | None) -> None:
@@ -1226,6 +1242,17 @@ async def accuracy():
     """
     pool = await db()
     async with pool.acquire() as conn:
+        # Same rule as everywhere else: with no run there is nothing to be right
+        # or wrong about. A page reading "0% constraint compliance" against zero
+        # orders is not a poor score, it is a claim about a thing that never
+        # happened — and it is the reason this screen once reported that we had
+        # failed at everything.
+        if await _active_run_id(conn) is None:
+            return {"measured": False, "active_run_id": None,
+                    "reason": "No test run. Nothing has been asked of the agent yet, "
+                              "so there is nothing to measure.",
+                    "metrics": [], "violations": []}
+
         pos = await conn.fetch(
             """select p.id, p.quantity, p.unit_price, p.component_id, p.supplier_id,
                       p.mode::text as mode, p.status::text as status,
@@ -1339,6 +1366,30 @@ async def now_state():
     """
     pool = await db()
     async with pool.acquire() as conn:
+        # No run means no evidence, and every field below is a claim about
+        # something that happened. `production_at_risk` computed off the
+        # baseline is the reason this screen once said "SHORT BY 460" in the
+        # header and "nothing at risk" in the panel beside it: the shortfall was
+        # real arithmetic about a world nobody had disrupted yet.
+        # `null` is not `0`, and "no run" is not "all clear".
+        active_run_id = await _active_run_id(conn)
+        if active_run_id is None:
+            return {
+                "clock": CLOCK.state(),
+                "active_run_id": None,
+                "has_run": False,
+                "queue": [],
+                "incidents": [],
+                "at_risk": [],
+                "production_at_risk": False,
+                "worst": None,
+                "min_coverage_days": None,
+                "agent_busy": 0,
+                "next_delivery": None,
+                "note": "No test run. The baseline topology is loaded; nothing has "
+                        "happened to it yet.",
+            }
+
         actions = await conn.fetch(
             """select a.id, a.incident_id, a.action, a.estimated_cost, a.reason,
                       i.component_id, c.display_name as component_name
@@ -1373,7 +1424,6 @@ async def now_state():
                 where m.delivery_state = 'draft' order by m.id desc limit 8""")
         # Scoped to the active run. An incident from a run that has been reset
         # away is not "what is happening right now".
-        active_run_id = await _active_run_id(conn)
         incidents = await conn.fetch(
             """select i.id, i.status::text as status, i.severity::text as severity,
                       i.title, i.component_id, c.display_name as component_name

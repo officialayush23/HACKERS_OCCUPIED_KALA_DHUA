@@ -119,7 +119,13 @@ async def wake(conn, *, component_id: str, trigger: str,
         await emit(conn, incident_id=incident_id, actor="risk_detector",
                    event_type="INCIDENT_OPENED",
                    human_summary=f"Opened automatically — {verdict.headline}",
-                   payload={"severity": verdict.severity, "auto": True})
+                   agent_reason=(
+                       f"Coverage for {component_id} fell to "
+                       f"{verdict.coverage_days:.1f} days against the deadline, which is "
+                       f"inside the {verdict.severity} threshold. I opened this myself "
+                       f"rather than wait to be asked — nobody pressed anything."),
+                   payload={"severity": verdict.severity, "auto": True,
+                            "coverage_days": verdict.coverage_days})
 
     _STATE[incident_id] = {
         "incident_id": incident_id, "component_id": component_id,
@@ -328,6 +334,10 @@ async def _plan_and_validate(conn, incident_id: str) -> None:
     for rej in result.get("rejections", []):
         await emit(conn, incident_id=incident_id, actor="solver",
                    event_type="OPTION_REJECTED", human_summary=rej["human_reason"],
+                   agent_reason=(
+                       f"{rej['supplier_id']} was removed before scoring. "
+                       f"{rej['constraint']} is a hard filter, not a weighting — no price "
+                       f"or lead time can compensate for it."),
                    payload={"supplier_id": rej["supplier_id"],
                             "constraint": rej["constraint"], **rej.get("detail", {})})
 
@@ -376,6 +386,13 @@ async def _plan_and_validate(conn, incident_id: str) -> None:
     await emit(conn, incident_id=incident_id, actor="agent", event_type="OPTION_SELECTED",
                human_summary=f"Recovery plan: {chosen['label']} — "
                              f"Rs {chosen['total_cost']:,.0f}.",
+               agent_reason=(
+                   f"Scored {len(result['options'])} option(s) on continuity 0.35, cost 0.20 "
+                   f"and supplier risk 0.15. {chosen['label']} scored {chosen['score']:.3f}: "
+                   f"covers {chosen['units_covered']} of {result['shortfall']} units, "
+                   f"arrives in {(chosen['arrival_hours'] or 0)/24:.1f} days. "
+                   f"{len(result['rejections'])} option(s) never reached scoring because they "
+                   f"failed a hard constraint."),
                payload={**chosen, "plan_id": plan_id, "llm_narrative": used_llm})
 
     # ---- policy gate -------------------------------------------------------

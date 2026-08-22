@@ -536,6 +536,12 @@ async def raise_human_input(conn, *, kind: str, question: str,
     await emit(conn, incident_id=incident_id, actor="agent",
                event_type="HUMAN_INPUT_REQUIRED",
                human_summary=f"{question} {detail or ''}".strip(),
+               agent_reason=(
+                   f"I stopped rather than guess. Confidence in my reading was "
+                   f"{confidence if confidence is not None else 'too low to state'}, and "
+                   f"acting on a figure the counterparty did not commit to would be "
+                   f"inventing a fact the solver would then spend money on. "
+                   f"Handing this to a person is the correct outcome, not a failure."),
                payload={"request_id": rid, "kind": kind, "confidence": confidence,
                         "options": options or [], "supplier_id": supplier_id,
                         **(context or {})})

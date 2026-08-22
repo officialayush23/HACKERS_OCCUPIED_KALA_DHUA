@@ -289,6 +289,15 @@ async def _supplier_reply(thread_id: int, supplier_id: str, name: str,
             await emit(conn, incident_id=incident_id, actor="agent",
                        event_type="MESSAGE_INTERPRETED",
                        human_summary=f"Read {name}\u2019s reply \u2014 {interp['summary']}",
+                       agent_reason=(
+                           f"Deterministic extraction ran first and read: "
+                           f"quantity={interp.get('quantity_mentioned')}, "
+                           f"price={interp.get('unit_price')}, "
+                           f"lead time={interp.get('lead_time_days')} days. "
+                           f"Confidence {interp.get('confidence')}. "
+                           + ("A model refined this but could not overrule a number read "
+                              "straight from the text." if used_llm
+                              else "No model was available; this is the parser alone.")),
                        payload={**interp, "supplier_id": supplier_id,
                                 "supplier_name": name, "llm": used_llm,
                                 "message": persona["script"]})

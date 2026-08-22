@@ -66,6 +66,11 @@ export const api = {
   humanInput:  ()          => req('/api/human-input'),
   resolveInput:(id, b)     => post(`/api/human-input/${id}/resolve`, b),
 
+  // The whole history, across every run — deliberately NOT scoped to the active
+  // one. The Decision Log answers "this run"; the audit page answers "ever".
+  auditAll:    (runId)     => req('/api/audit?limit=500&since_reset=false'
+                                  + (runId ? `&run_id=${runId}` : '')),
+
   // the brief
   intelligence: (incidentId, poId) => req(
     '/api/intelligence'

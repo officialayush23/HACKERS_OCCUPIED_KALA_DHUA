@@ -1,7 +1,7 @@
 import { motion } from 'motion/react'
 import {
-  Activity, Boxes, CheckCircle2, ClipboardCheck, Gauge, GitBranch, LayoutGrid,
-  MessageSquare,
+  Activity, Boxes, CheckCircle2, ClipboardCheck, Gauge, GitBranch, HelpCircle,
+  LayoutGrid, MessageSquare, ScrollText,
   Moon, Scale, Sun, TriangleAlert, Warehouse,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -29,6 +29,7 @@ export const NAV_GROUPS = [
       { id: 'audit',     label: 'Agent Activity', icon: Activity,      sub: 'what it did, and why' },
       { id: 'comms',     label: 'Conversations',  icon: MessageSquare, sub: 'suppliers & warehouse' },
       { id: 'approvals', label: 'Approvals',      icon: CheckCircle2,  sub: 'over its authority' },
+      { id: 'questions', label: 'Questions',      icon: HelpCircle,    sub: 'it refused to guess' },
     ],
   },
   {
@@ -43,6 +44,7 @@ export const NAV_GROUPS = [
       { id: 'decisions',  label: 'Decisions',   icon: Scale,          sub: 'chosen vs refused' },
       { id: 'evaluation', label: 'Evaluation',  icon: ClipboardCheck, sub: 'did this run pass' },
       { id: 'scoring',    label: 'Performance', icon: Gauge,          sub: 'accuracy & rubric' },
+      { id: 'auditlog',   label: 'Audit Trail',  icon: ScrollText,     sub: 'every run, filtered' },
     ],
   },
 ]
