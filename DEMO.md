@@ -117,6 +117,25 @@ The banner names the new plan and the extra cost. Then kill the second viable su
 Nothing in the what-if is recorded. Say that out loud — it is a sandbox, and the audit log stays
 a record of what actually happened.
 
+### 3:20 — The second lever. "Every other agent here can only spend money."
+
+Still on the Decision Explorer. Point at the top row of the matrix — the winning option is not a
+purchase order.
+
+> "The cheapest way to buy our way out of this is ₹86,700. The agent's answer is ₹43,200, and the
+> difference isn't a better supplier. It found that a low-priority aftermarket batch for Shakti
+> Auto — not due for another two weeks — is sitting on 300 of the units we need. So it asks for
+> those back and buys only the remaining 160."
+
+Then point at the **"Who else pays"** row:
+
+> "It also tells you who absorbs that, in the only currency that matters here: Shakti Auto waits
+> eleven more days. And look — this is the cheapest option on the board, and it *still* stops for
+> approval. Not because of the money. Because delaying somebody else's order is not a decision an
+> agent gets to make on its own."
+
+That is the difference between a purchasing bot and an operations agent.
+
 ### 3:30 — Hazmat. "Some options aren't expensive. They're illegal."
 
 Switch component to COMP-207 (Li-ion). Say:

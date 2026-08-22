@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'motion/react'
 import {
-  Ban, Check, ChevronDown, Clock, FlaskConical, Loader2, RotateCcw, Scale, TrendingDown,
-  TrendingUp, TriangleAlert,
+  Ban, CalendarClock, Check, ChevronDown, Clock, FlaskConical, Loader2, RotateCcw, Scale,
+  TrendingDown, TrendingUp, TriangleAlert,
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { inr } from '@/lib/format'
@@ -38,10 +38,11 @@ const CONSTRAINT = {
 }
 
 const KIND = {
-  single:     'One supplier',
-  split:      'Split order',
-  do_nothing: 'No action',
-  reschedule: 'Reschedule',
+  single:           'One supplier',
+  split:            'Split order',
+  do_nothing:       'No action',
+  reschedule:       'Reschedule this run',
+  reschedule_other: 'Free up units',
 }
 
 const hrs = (h) => (h == null ? 'never' : h < 48 ? `${Math.round(h)}h` : `${(h / 24).toFixed(1)}d`)
@@ -95,13 +96,14 @@ function Row({ label, hint, cells, chosenIndex, className = '' }) {
   )
 }
 
-export default function DecisionExplorer() {
+export default function DecisionExplorer({ onApprove }) {
   const { data: ctx } = useQuery({ queryKey: ['context'], queryFn: api.context })
   const orders = ctx?.production ?? []
 
   const [poId, setPoId] = useState(null)
   const [failed, setFailed] = useState([])     // suppliers the what-if has killed
   const [showRejects, setShowRejects] = useState(true)
+  const [showMatrix, setShowMatrix] = useState(false)
 
   // Default to the order in the most trouble, not the first one alphabetically.
   useEffect(() => {
@@ -139,7 +141,7 @@ export default function DecisionExplorer() {
   return (
     <div className="flex h-full flex-col">
       {/* ---------------------------------------------------------- header */}
-      <div className="flex shrink-0 items-center gap-2.5 border-b px-4 py-2.5">
+      <div className="flex shrink-0 items-center gap-2.5 border-b px-6 py-4">
         <h2 className="text-muted-foreground flex items-center gap-1.5 text-[10px]
                        font-medium tracking-[0.14em] uppercase">
           <Scale className="size-3.5" />Decision explorer
@@ -166,7 +168,7 @@ export default function DecisionExplorer() {
       </div>
 
       <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-4 p-4">
+        <div className="flex flex-col gap-5 p-6">
 
           {error && (
             <p className="text-danger text-[12px]">{String(error.message ?? error)}</p>
@@ -182,8 +184,12 @@ export default function DecisionExplorer() {
                  order?.oem_customer ? `for ${order.oem_customer}` : ''],
                 ['Budget left', inr(result.budget_left),
                  `spends over ${inr(result.approval_threshold)} need a human`],
-                ['Options costed', `${result.options?.length ?? 0}`,
-                 `${result.rejections?.length ?? 0} suppliers refused`],
+                (result.reschedulable?.length
+                  ? ['Held by other runs', `${result.reschedulable
+                       .reduce((a, r) => a + r.units_held, 0)} units`,
+                     `${result.reschedulable[0].product_name} could stand down`]
+                  : ['Options costed', `${result.options?.length ?? 0}`,
+                     `${result.rejections?.length ?? 0} suppliers refused`]),
               ].map(([k, v, s]) => (
                 <div key={k} className="min-w-0">
                   <div className="text-muted-foreground text-[9.5px] font-medium
@@ -261,8 +267,88 @@ export default function DecisionExplorer() {
             )}
           </AnimatePresence>
 
-          {/* --------------------------------------------- comparison matrix */}
+          {/* ------------------------------------------- the recommendation */}
           {options.length > 0 && (
+            <div className="flex flex-col gap-3">
+              {options.slice(0, 3).map((o, i) => {
+                const late = o.arrival_hours != null && result?.hours_left != null &&
+                  o.arrival_hours > result.hours_left
+                const covers = o.units_covered >= (result?.shortfall ?? 0)
+                return (
+                  <div key={i}
+                    className={`rounded-xl border p-5 ${i === 0
+                      ? 'border-primary/50 bg-primary/[0.05]' : ''}`}>
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <Badge variant="outline" className={i === 0
+                        ? 'border-primary/50 bg-primary/15 text-primary gap-1 text-[10px]'
+                        : 'text-[10px]'}>
+                        {i === 0 ? <><Check className="size-2.5" />recommended</>
+                                 : i === 1 ? 'alternative' : 'backup'}
+                      </Badge>
+                      <span className="text-[16px] font-semibold tracking-tight">{o.label}</span>
+                      <span className="text-muted-foreground ml-auto font-mono text-[15px]
+                                       tabular-nums">
+                        {o.total_cost ? inr(o.total_cost) : 'no cost'}
+                        <span className="opacity-60"> · {hrs(o.arrival_hours)}</span>
+                      </span>
+                    </div>
+
+                    {i === 0 ? (
+                      <ul className="mt-4 flex flex-col gap-1.5">
+                        {[
+                          covers ? `Covers all ${result.shortfall} units` : null,
+                          !late && o.arrival_hours != null ? 'Arrives before the line stops' : null,
+                          !o.requires_approval ? 'Within your agent\u2019s authority'
+                                               : 'Needs your approval before anything happens',
+                          o.impact ? `Frees ${o.impact.units_freed} units without buying them`
+                                   : null,
+                          o.lines?.[0]?.supplier_name
+                            ? `${o.lines[0].supplier_name} at ${inr(o.lines[0].unit_price)}/unit`
+                            : null,
+                        ].filter(Boolean).map((line, k) => (
+                          <li key={k} className="flex items-start gap-2 text-[13px] leading-snug">
+                            <Check className="text-ok mt-[3px] size-3.5 shrink-0" />{line}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-muted-foreground mt-3 flex items-start gap-2
+                                    text-[12.5px] leading-relaxed">
+                        <TriangleAlert className="text-warn mt-[3px] size-3.5 shrink-0" />
+                        {late ? 'Arrives after the deadline — the line stops first.'
+                          : !covers ? `Only covers ${o.units_covered} of ${result.shortfall} units.`
+                          : o.kind === 'do_nothing' ? 'Accepts the shortfall. The line stops.'
+                          : o.impact ? `Delays ${o.impact.oem_customer} by ${o.impact.delay_days} days.`
+                          : o.rationale}
+                      </p>
+                    )}
+
+                    {i === 0 && (
+                      <div className="mt-5 flex flex-wrap items-center gap-2.5">
+                        <Button size="lg" className="h-10"
+                                onClick={() => onApprove?.(o)}>
+                          {o.requires_approval
+                            ? `Approve ${o.total_cost ? inr(o.total_cost) : 'this plan'}`
+                            : 'Agent is already executing this'}
+                        </Button>
+                        <Button variant="ghost" size="sm"
+                                onClick={() => setShowMatrix((v) => !v)}
+                                className="text-muted-foreground h-9 gap-1.5 text-[12px]">
+                          <Scale className="size-3.5" />
+                          {showMatrix ? 'Hide the scoring' : 'View the scoring model'}
+                          <ChevronDown className={`size-3 transition-transform
+                            ${showMatrix ? '' : '-rotate-90'}`} />
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {/* --------------------------------------------- comparison matrix */}
+          {showMatrix && options.length > 0 && (
             <div className="overflow-x-auto rounded-xl border">
               <table className="w-full border-collapse">
                 <thead>
@@ -347,10 +433,18 @@ export default function DecisionExplorer() {
                            : <span className="text-muted-foreground text-[11px]">agent can act</span>
                        ))} />
 
-                  <Row label="Who supplies it" chosenIndex={0}
+                  <Row label="Where units come from" chosenIndex={0}
                        cells={options.map((o) => (
-                         o.lines?.length
+                         (o.lines?.length || o.impact)
                            ? <div className="flex flex-col gap-1">
+                               {o.impact && (
+                                 <div className="text-primary text-[11px] leading-tight">
+                                   <span className="font-medium">Stock released</span>
+                                   <span className="opacity-80">
+                                     {' '}· {o.impact.units_freed}u · free
+                                   </span>
+                                 </div>
+                               )}
                                {o.lines.map((l, j) => (
                                  <div key={j} className="text-[11px] leading-tight">
                                    <span className="font-medium">{l.supplier_name}</span>
@@ -362,6 +456,24 @@ export default function DecisionExplorer() {
                              </div>
                            : <span className="text-muted-foreground text-[11px]">nobody</span>
                        ))} />
+
+                  {options.some((o) => o.impact) && (
+                    <Row label="Who else pays" hint="in time, not money" chosenIndex={0}
+                         cells={options.map((o) => (
+                           o.impact
+                             ? <div className="border-warn/40 bg-warn/10 flex items-start gap-1.5
+                                               rounded-md border px-1.5 py-1 text-[10.5px]
+                                               leading-relaxed">
+                                 <CalendarClock className="text-warn mt-0.5 size-3 shrink-0" />
+                                 <span>
+                                   <b>{o.impact.oem_customer}</b> waits {o.impact.delay_days} more
+                                   days for {o.impact.product_name}
+                                   <span className="opacity-70"> ({o.impact.priority} priority)</span>
+                                 </span>
+                               </div>
+                             : <span className="text-muted-foreground text-[11px]">nobody</span>
+                         ))} />
+                  )}
 
                   <Row label="Reasoning" chosenIndex={0}
                        cells={options.map((o) => (

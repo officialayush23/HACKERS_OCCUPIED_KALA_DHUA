@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'motion/react'
-import { AlertTriangle, Loader2, MapPinned, ShieldCheck, Truck } from 'lucide-react'
+import { AlertTriangle, History, Loader2, MapPinned, ShieldCheck, Truck } from 'lucide-react'
 import { api } from '@/lib/api'
 import { inr } from '@/lib/format'
 import { Badge } from '@/components/ui/badge'
@@ -217,7 +217,7 @@ export default function MapView({ revision, onFallback }) {
         {sel && (
           <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: 8 }}
-                      className="glass pointer-events-none absolute top-4 left-4 z-20 w-[17rem]
+                      className="glass pointer-events-none absolute top-4 left-4 z-20 w-[20rem] max-h-[70%] overflow-y-auto
                                  rounded-xl p-3 shadow-xl">
             <div className="flex items-start gap-2">
               <div className="min-w-0">
@@ -239,6 +239,10 @@ export default function MapView({ revision, onFallback }) {
                   <ShieldCheck className="size-2.5" />Trust</div>
                 <div className="font-mono text-[15px]">
                   {Number(sel.effective_reliability ?? 0).toFixed(2)}</div>
+                <div className="text-muted-foreground text-[9.5px]">
+                  {(sel.deliveries_on_time ?? 0) + (sel.deliveries_late ?? 0) > 0
+                    ? `${sel.deliveries_on_time} on time \u00b7 ${sel.deliveries_late} late`
+                    : 'no deliveries yet'}</div>
               </div>
               <div>
                 <div className="text-muted-foreground flex items-center gap-1 text-[9.5px]
@@ -258,10 +262,47 @@ export default function MapView({ revision, onFallback }) {
             {sel.shipments?.map((s) => (
               <div key={s.id} className="mt-1.5 flex items-center gap-1.5 text-[10.5px]">
                 <span className="font-mono">{s.id}</span>
-                <span className="text-muted-foreground">{s.quantity}u · {s.mode}</span>
+                <span className="text-muted-foreground">{s.quantity}u \u00b7 {s.mode}</span>
                 <span className="ml-auto font-mono">{inr(s.total_value)}</span>
               </div>
             ))}
+
+            {sel.trust_moves?.length > 0 && (
+              <div className="mt-3">
+                <div className="text-muted-foreground text-[9.5px] tracking-[0.1em] uppercase">
+                  Why the score moved
+                </div>
+                <div className="mt-1.5 flex flex-col gap-1.5">
+                  {sel.trust_moves.map((m, i) => (
+                    <div key={i} className="flex items-start gap-1.5 text-[10.5px] leading-snug">
+                      <span className={`shrink-0 font-mono ${
+                        m.delta > 0 ? 'text-ok' : m.delta < 0 ? 'text-danger'
+                                                             : 'text-muted-foreground'}`}>
+                        {m.delta > 0 ? '+' : ''}{Number(m.delta).toFixed(2)}
+                      </span>
+                      <span className="text-muted-foreground">{m.reason}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {sel.actions?.length > 0 && (
+              <div className="mt-3">
+                <div className="text-muted-foreground flex items-center gap-1 text-[9.5px]
+                                tracking-[0.1em] uppercase">
+                  <History className="size-2.5" />What the agent did
+                </div>
+                <div className="mt-1.5 flex flex-col gap-1.5">
+                  {sel.actions.map((a, i) => (
+                    <div key={i} className="flex items-start gap-1.5 text-[10.5px] leading-snug">
+                      <span className="bg-primary/60 mt-[6px] size-1 shrink-0 rounded-full" />
+                      <span className="text-muted-foreground">{a.summary}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

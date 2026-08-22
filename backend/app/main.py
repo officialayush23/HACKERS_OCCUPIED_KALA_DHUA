@@ -21,7 +21,7 @@ from . import injector
 from .scenarios import EVENT_TYPES, SCENARIOS, list_scenarios
 from .solver import solve_for_production_order
 from .scorer import score_run
-from . import agent, comms, llm
+from . import agent, comms, learning, llm
 from .risk import assess as assess_risk
 
 SEED_PATH = pathlib.Path(__file__).resolve().parents[2] / "supabase" / "seed.sql"
@@ -245,11 +245,15 @@ async def world():
                  left join shipment_tracking t on t.po_id = p.id
                 order by p.expected_delivery""")
         prod = await conn.fetch("select * from production_orders order by deadline")
+        # supplier_effective, never suppliers + supplier_memory by hand. Trust has
+        # exactly one definition and this is not the place to re-derive it.
         sup = await conn.fetch(
-            """select s.*, m.derived_reliability, m.contradictions_detected,
-                      m.quality_failures, m.avg_delay_days
-                 from suppliers s left join supplier_memory m on m.supplier_id = s.id
-                order by m.derived_reliability desc nulls last""")
+            """select s.*, se.effective_reliability, se.seeded_prior,
+                      se.contradictions_detected, se.quality_failures, se.avg_delay_days,
+                      se.deliveries_on_time, se.deliveries_late,
+                      se.units_delivered, se.units_rejected, se.last_event
+                 from suppliers s join supplier_effective se on se.supplier_id = s.id
+                order by se.effective_reliability desc nulls last""")
     return {
         "clock": CLOCK.state(),
         "inventory": [dict(r) for r in inv],
@@ -307,6 +311,78 @@ async def solve_endpoint(production_order_id: str, record: bool = False,
     return result
 
 
+class RescheduleBody(BaseModel):
+    production_order_id: str
+    delay_days: int = 7
+    reason: str = ""
+    incident_id: str | None = None
+    approved_by: str = "operator"
+
+
+@app.post("/api/production/reschedule")
+async def reschedule_production(body: RescheduleBody):
+    """Stand a production run down so its allocated units can go elsewhere.
+
+    This is the one lever that costs no money and still needs a human every
+    time: the delay lands on another customer's order. The agent may propose
+    it; only an operator commits it.
+    """
+    if body.delay_days < 1 or body.delay_days > 30:
+        raise HTTPException(400, "delay_days must be between 1 and 30")
+
+    pool = await db()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """select po.id, po.deadline, po.original_deadline, po.priority::text as priority,
+                      po.allocated_units, po.oem_customer, po.required_component,
+                      pr.name as product_name
+                 from production_orders po
+                 left join products pr on pr.id = po.product_id
+                where po.id = $1""", body.production_order_id)
+        if row is None:
+            raise HTTPException(404, f"unknown production order {body.production_order_id}")
+        if row["allocated_units"] <= 0:
+            raise HTTPException(409, f"{row['id']} holds no units — nothing to release")
+
+        updated = await conn.fetchrow(
+            """update production_orders
+                  set deadline           = deadline + make_interval(days => $2),
+                      original_deadline  = coalesce(original_deadline, deadline),
+                      rescheduled_at     = now(),
+                      rescheduled_reason = nullif($3, ''),
+                      allocated_units    = 0
+                where id = $1
+            returning deadline, original_deadline, allocated_units""",
+            body.production_order_id, body.delay_days, body.reason)
+
+        what = row["product_name"] or row["id"]
+        freed = int(row["allocated_units"])
+        await emit(conn, incident_id=body.incident_id, actor=body.approved_by,
+                   event_type="PRODUCTION_RESCHEDULED",
+                   human_summary=(
+                       f"{what} for {row['oem_customer']} pushed back {body.delay_days} days. "
+                       f"That releases {freed} units of {row['required_component']} "
+                       f"to the line that is about to stop."),
+                   payload={"production_order_id": row["id"],
+                            "oem_customer": row["oem_customer"],
+                            "priority": row["priority"],
+                            "units_freed": freed,
+                            "delay_days": body.delay_days,
+                            "was_due": row["deadline"].isoformat(),
+                            "now_due": updated["deadline"].isoformat(),
+                            "original_deadline": updated["original_deadline"].isoformat(),
+                            "reason": body.reason,
+                            "approved_by": body.approved_by})
+
+        # The shortage that triggered this has changed shape — let the agent look
+        # again rather than leaving it holding a stale plan.
+        await injector._react(conn, row["required_component"], "production_rescheduled")
+
+    return {"ok": True, "production_order_id": row["id"], "units_freed": freed,
+            "delay_days": body.delay_days,
+            "now_due": updated["deadline"].isoformat()}
+
+
 @app.get("/api/kpis")
 async def kpis():
     """Headline numbers for the overview strip."""
@@ -360,7 +436,9 @@ async def network():
             "select id, name, city, lat, lng from warehouses where id='Pune-Plant-1'")
         sup = await conn.fetch(
             """select s.id, s.name, s.city, s.country, s.lat, s.lng,
-                      se.effective_reliability, se.contradictions_detected,
+                      se.effective_reliability, se.seeded_prior,
+                      se.contradictions_detected, se.deliveries_on_time,
+                      se.deliveries_late, se.units_delivered, se.units_rejected,
                       array_agg(distinct l.mode::text) as modes,
                       min(l.transit_days) as transit_days,
                       array_agg(distinct sc.component_id) as components
@@ -369,7 +447,9 @@ async def network():
                  left join supplier_lanes l on l.supplier_id = s.id
                  left join supplier_catalog sc on sc.supplier_id = s.id
                 group by s.id, s.name, s.city, s.country, s.lat, s.lng,
-                         se.effective_reliability, se.contradictions_detected""")
+                         se.effective_reliability, se.seeded_prior,
+                         se.contradictions_detected, se.deliveries_on_time,
+                         se.deliveries_late, se.units_delivered, se.units_rejected""")
         shipments = await conn.fetch(
             """select p.id, p.supplier_id, p.component_id, p.status::text as status,
                       p.mode::text as mode, p.quantity, p.total_value,
@@ -377,6 +457,18 @@ async def network():
                  from purchase_orders p
                  left join shipment_tracking t on t.po_id = p.id
                 where p.status in ('open','in_transit','delayed')""")
+        # What the agent actually DID with each supplier. Hovering a node should
+        # answer "and what did you do about it?", not just show a trust number.
+        acts = await conn.fetch(
+            """select technical_payload->>'supplier_id' as supplier_id,
+                      event_type, human_summary, ts, sequence
+                 from audit_events
+                where technical_payload->>'supplier_id' is not null
+                order by sequence desc limit 400""")
+        learned = await conn.fetch(
+            """select supplier_id, event, delta, after_score, reason, created_at
+                 from reliability_events order by id desc limit 200""")
+
     now = CLOCK.now()
     ships = []
     for r in shipments:
@@ -386,8 +478,28 @@ async def network():
         ships.append({**dict(r), "contradiction": contradiction,
                       "hours_to_eta": round(hrs, 1),
                       "progress": max(0.05, min(0.95, 1 - (hrs / 240)))})
+
+    by_supplier: dict[str, list] = {}
+    for a in acts:
+        by_supplier.setdefault(a["supplier_id"], [])
+        if len(by_supplier[a["supplier_id"]]) < 5:
+            by_supplier[a["supplier_id"]].append(
+                {"event": a["event_type"], "summary": a["human_summary"],
+                 "ts": a["ts"].isoformat()})
+
+    trust_moves: dict[str, list] = {}
+    for l in learned:
+        trust_moves.setdefault(l["supplier_id"], [])
+        if len(trust_moves[l["supplier_id"]]) < 3:
+            trust_moves[l["supplier_id"]].append(
+                {"event": l["event"], "delta": float(l["delta"] or 0),
+                 "after": float(l["after_score"] or 0), "reason": l["reason"]})
+
     return {"plant": dict(plant) if plant else None,
-            "suppliers": [dict(r) for r in sup],
+            "suppliers": [{**dict(r),
+                           "actions": by_supplier.get(r["id"], []),
+                           "trust_moves": trust_moves.get(r["id"], [])}
+                          for r in sup],
             "shipments": ships}
 
 
@@ -484,7 +596,13 @@ async def agent_ask(body: AskBody):
              "recent_rejections": [r["human_summary"] for r in rejects],
              "inventory": [dict(r) for r in inv]}
     answer, used_llm = await llm.answer_question(body.question, state)
-    return {"answer": answer, "llm": used_llm}
+    # Say what the answer was formed from. An answer with no visible grounding is
+    # indistinguishable from an answer that was made up.
+    grounding = [f"{len(state['open_incidents'])} open incidents",
+                 f"{len(state['recent_plans'])} recovery plans",
+                 f"{len(state['recent_rejections'])} recorded refusals",
+                 f"{len(state['inventory'])} components in stock"]
+    return {"answer": answer, "llm": used_llm, "grounding": grounding}
 
 
 @app.get("/api/llm/health")
@@ -617,9 +735,17 @@ async def receive_shipment(b: ReceiptBody):
             """select id from incidents where component_id=$1
                 and status not in ('resolved','failed') order by opened_at desc limit 1""",
             po["component_id"])
+
+        # The delivery landed. This is the only moment a supplier can *earn*
+        # trust back, so it has to run whether or not an incident is open.
+        learned = await learning.on_goods_received(
+            conn, po_id=b.po_id, quantity_received=b.quantity_received,
+            quantity_rejected=quarantined, incident_id=inc)
+
         if inc:
-            return await agent.verify(conn, inc)
-    return {"ok": True}
+            out = await agent.verify(conn, inc)
+            return {**(out if isinstance(out, dict) else {"ok": True}), "learned": learned}
+    return {"ok": True, "learned": learned}
 
 
 # =========================== APPROVALS =======================================
@@ -642,6 +768,117 @@ async def approvals():
 
 
 # ========================= BUSINESS CONTEXT ==================================
+
+
+@app.get("/api/suppliers/{supplier_id}/reliability")
+async def supplier_reliability(supplier_id: str):
+    """Trust, and the record that produced it.
+
+    The number on its own is an opinion. With the events behind it, it is an
+    argument the operator can check — and disagree with.
+    """
+    pool = await db()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "select * from supplier_effective where supplier_id=$1", supplier_id)
+        if row is None:
+            raise HTTPException(404, f"unknown supplier {supplier_id}")
+        return {"supplier": dict(row),
+                "history": await learning.history(conn, supplier_id)}
+
+
+@app.get("/api/now")
+async def now_state():
+    """One answer to "what is happening right now?"
+
+    Deliberately small and deliberately ranked: an operator glancing at a strip
+    at the top of the screen has room for a handful of facts, and the ones that
+    matter are the ones that need them.
+    """
+    pool = await db()
+    async with pool.acquire() as conn:
+        actions = await conn.fetch(
+            """select a.id, a.incident_id, a.action, a.estimated_cost, a.reason,
+                      i.component_id, c.display_name as component_name
+                 from approvals a
+                 left join incidents i on i.id = a.incident_id
+                 left join components c on c.id = i.component_id
+                where a.status = 'pending' order by a.id desc""")
+        tasks = await conn.fetch(
+            """select w.id, w.task_type, w.priority, w.instructions,
+                      c.display_name as component_name
+                 from warehouse_tasks w
+                 left join components c on c.id = w.component_id
+                where w.status in ('open','in_progress')
+                order by case w.priority when 'urgent' then 0 when 'high' then 1
+                                         when 'normal' then 2 else 3 end, w.id""")
+        waiting = await conn.fetch(
+            """select t.id, t.counterparty_name, t.counterparty_type, t.subject
+                 from message_threads t
+                where t.status = 'awaiting_reply' order by t.id desc limit 6""")
+        incidents = await conn.fetch(
+            """select i.id, i.status::text as status, i.severity::text as severity,
+                      i.title, i.component_id, c.display_name as component_name
+                 from incidents i
+                 left join components c on c.id = i.component_id
+                where i.status not in ('resolved','failed')
+                order by case i.severity::text when 'critical' then 0 when 'high' then 1
+                                               when 'medium' then 2 else 3 end,
+                         i.opened_at desc""")
+        next_delivery = await conn.fetchrow(
+            """select p.id, p.expected_delivery, p.quantity, s.name as supplier_name,
+                      c.display_name as component_name
+                 from purchase_orders p
+                 left join suppliers s on s.id = p.supplier_id
+                 left join components c on c.id = p.component_id
+                where p.status in ('open','in_transit')
+                order by p.expected_delivery limit 1""")
+        cover = await conn.fetchval(
+            """select min(case when daily_usage > 0
+                               then usable_stock::numeric / daily_usage else 999 end)
+                 from inventory""")
+        working = await conn.fetchval(
+            """select count(*) from incidents
+                where status in ('investigating','planning','executing')""")
+
+    def _cover(v):
+        return round(float(v), 1) if v is not None else None
+
+    # The action queue, in the order a human should work it.
+    queue = []
+    for a in actions:
+        queue.append({"kind": "approval", "urgency": "critical", "id": f"approval-{a['id']}",
+                      "incident_id": a["incident_id"],
+                      "title": a["action"],
+                      "detail": a["reason"],
+                      "cost": float(a["estimated_cost"] or 0),
+                      "cta": "Review"})
+    for t in tasks:
+        queue.append({"kind": "warehouse", "id": f"task-{t['id']}",
+                      "urgency": "high" if t["priority"] in ("urgent", "high") else "normal",
+                      "title": f"{t['task_type'].replace('_', ' ').capitalize()}"
+                               + (f" — {t['component_name']}" if t["component_name"] else ""),
+                      "detail": t["instructions"], "cta": "Open"})
+    for w in waiting:
+        queue.append({"kind": "waiting", "urgency": "normal", "id": f"thread-{w['id']}",
+                      "title": f"Waiting on {w['counterparty_name']}",
+                      "detail": w["subject"], "cta": "View"})
+
+    return {
+        "clock": CLOCK.state(),
+        "queue": queue,
+        "incidents": [dict(r) for r in incidents],
+        "min_coverage_days": _cover(cover),
+        "agent_busy": int(working or 0),
+        "next_delivery": (
+            {"po_id": next_delivery["id"],
+             "supplier_name": next_delivery["supplier_name"],
+             "component_name": next_delivery["component_name"],
+             "quantity": next_delivery["quantity"],
+             "hours_away": round(
+                 (next_delivery["expected_delivery"] - CLOCK.now()).total_seconds() / 3600, 1)}
+            if next_delivery else None),
+    }
 
 
 @app.get("/api/context")

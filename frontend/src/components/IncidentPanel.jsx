@@ -61,7 +61,7 @@ export default function IncidentPanel({ revision, onOpenDecision }) {
 
   return (
     <div className="flex h-full flex-col overflow-y-auto">
-      <div className="p-4">
+      <div className="p-5">
         <div className="flex items-center gap-2">
           <Badge variant="outline" className={SEV[top.severity]}>
             <AlertTriangle className="mr-1 size-2.5" />{top.severity}
@@ -108,7 +108,7 @@ export default function IncidentPanel({ revision, onOpenDecision }) {
       {plan && (
         <>
           <Separator />
-          <div className="p-4">
+          <div className="p-5">
             <div className="text-muted-foreground mb-1.5 text-[10px] font-medium
                             tracking-[0.14em] uppercase">Proposed recovery</div>
             <motion.div layout className="glass rounded-lg p-3">
@@ -140,7 +140,7 @@ export default function IncidentPanel({ revision, onOpenDecision }) {
       {open.length > 1 && (
         <>
           <Separator />
-          <div className="p-4">
+          <div className="p-5">
             <div className="text-muted-foreground mb-1.5 text-[10px] font-medium
                             tracking-[0.14em] uppercase">
               {open.length - 1} other open

@@ -1,7 +1,7 @@
 import { motion } from 'motion/react'
 import {
   Activity, Boxes, CheckCircle2, Gauge, GitBranch, LayoutGrid, MessageSquare,
-  Moon, ScrollText, Scale, Sparkles, Sun, TriangleAlert, Warehouse,
+  Moon, Scale, Sun, TriangleAlert, Warehouse,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -17,31 +17,30 @@ export const NAV_GROUPS = [
   {
     group: 'Operations',
     items: [
-      { id: 'command',   label: 'Command Center', icon: LayoutGrid, sub: 'live operations' },
-      { id: 'network',   label: 'Live Network',   icon: GitBranch,  sub: 'lanes & shipments' },
-      { id: 'incidents', label: 'Incidents',      icon: TriangleAlert, sub: 'open & resolved' },
+      { id: 'command',   label: 'Overview',   icon: LayoutGrid,    sub: 'what needs you now' },
+      { id: 'incidents', label: 'Incidents',  icon: TriangleAlert, sub: 'open & resolved' },
+      { id: 'network',   label: 'Network',    icon: GitBranch,     sub: 'lanes & shipments' },
     ],
   },
   {
-    group: 'Decisions',
+    group: 'AI agent',
     items: [
-      { id: 'decisions', label: 'Decision Explorer', icon: Scale,       sub: 'chosen vs rejected' },
-      { id: 'approvals', label: 'Approvals',         icon: CheckCircle2, sub: 'over authority' },
-      { id: 'audit',     label: 'Audit Trail',       icon: ScrollText,  sub: 'immutable log' },
+      { id: 'audit',     label: 'Agent Activity', icon: Activity,      sub: 'what it did, and why' },
+      { id: 'comms',     label: 'Conversations',  icon: MessageSquare, sub: 'suppliers & warehouse' },
+      { id: 'approvals', label: 'Approvals',      icon: CheckCircle2,  sub: 'over its authority' },
     ],
   },
   {
-    group: 'Intelligence',
+    group: 'Execution',
     items: [
-      { id: 'ask',      label: 'Ask the Agent', icon: Sparkles, sub: 'conversational' },
-      { id: 'comms',    label: 'Communications', icon: MessageSquare, sub: 'supplier & warehouse' },
-      { id: 'scoring',  label: 'Performance',   icon: Gauge,    sub: 'rubric runs' },
+      { id: 'warehouse', label: 'Warehouse', icon: Warehouse, sub: 'stock & tasks' },
     ],
   },
   {
-    group: 'Warehouse',
+    group: 'Governance',
     items: [
-      { id: 'warehouse', label: 'Plant Operations', icon: Warehouse, sub: 'stock & tasks' },
+      { id: 'decisions', label: 'Decisions',   icon: Scale,      sub: 'chosen vs refused' },
+      { id: 'scoring',   label: 'Performance', icon: Gauge,      sub: 'rubric runs' },
     ],
   },
 ]
@@ -60,7 +59,7 @@ export function Sidebar({ page, onPage, status, criticals, tasks, approvals, org
   return (
     <SidebarRoot collapsible="icon" className="glass-panel">
       <SidebarHeader>
-        <div className="flex items-center gap-2.5 px-1 py-1.5">
+        <div className="flex items-center gap-3 px-1.5 py-2.5">
           <div className="bg-sidebar-primary/15 ring-sidebar-primary/30 flex size-8 shrink-0
                           items-center justify-center rounded-xl ring-1">
             <Activity className="text-sidebar-primary size-4.5" />
@@ -94,7 +93,7 @@ export function Sidebar({ page, onPage, status, criticals, tasks, approvals, org
                         isActive={active}
                         onClick={() => onPage(n.id)}
                         tooltip={badge > 0 ? `${n.label} — ${badge} waiting` : n.label}
-                        className="h-auto py-2">
+                        className="h-auto py-2.5">
                         <n.icon className={active ? 'text-sidebar-primary' : ''} />
                         <span className="min-w-0 flex-1">
                           <span className="block truncate text-[13px] leading-tight font-medium">
@@ -126,7 +125,7 @@ export function Sidebar({ page, onPage, status, criticals, tasks, approvals, org
 
       <SidebarFooter>
         <Separator className="group-data-[collapsible=icon]:hidden" />
-        <div className="px-1 py-1">
+        <div className="px-1.5 py-2">
           <div className="flex items-center gap-1.5">
             <span className={`size-1.5 shrink-0 rounded-full ${
               status === 'live' ? 'bg-ok animate-pulse'
@@ -151,8 +150,8 @@ export function Sidebar({ page, onPage, status, criticals, tasks, approvals, org
 
 export function Topbar({ title, subtitle, clock, theme, onToggleTheme, right }) {
   return (
-    <header className="glass-panel sticky top-0 z-20 flex shrink-0 items-center gap-3
-                       border-b px-4 py-3">
+    <header className="glass-panel sticky top-0 z-20 flex shrink-0 items-center gap-3.5
+                       border-b px-5 py-4">
       <SidebarTrigger className="text-muted-foreground hover:text-foreground -ml-1 size-8" />
       <Separator orientation="vertical" className="!h-5" />
 

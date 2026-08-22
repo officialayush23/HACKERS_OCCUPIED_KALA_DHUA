@@ -30,6 +30,7 @@ const NARRATIVE = new Set([
   'MESSAGE_SENT', 'MESSAGE_RECEIVED', 'MESSAGE_INTERPRETED',
   'WAREHOUSE_TASK_CREATED', 'PHYSICAL_COUNT_CONFIRMED', 'GOODS_RECEIVED',
   'INCIDENT_REOPENED', 'INCIDENT_RESOLVED', 'CONSTRAINT_ADDED',
+  'PRODUCTION_RESCHEDULED',
 ])
 
 function statusOf(ev) {
@@ -83,7 +84,7 @@ export default function AgentActivity({ events, incidentId, narrative, compact }
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2.5">
+      <div className="flex shrink-0 items-center gap-2 border-b px-6 py-4">
         <h2 className="text-muted-foreground text-[10px] font-medium tracking-[0.14em] uppercase">
           Agent activity
         </h2>
@@ -122,7 +123,7 @@ export default function AgentActivity({ events, incidentId, narrative, compact }
       </AnimatePresence>
 
       <ScrollArea className="min-h-0 flex-1">
-        <div className="px-4 py-3">
+        <div className="px-6 py-4">
           {feed.length === 0 ? (
             <div className="flex flex-col items-center gap-1.5 py-12 text-center">
               <CircleDashed className="text-muted-foreground/40 size-6" />

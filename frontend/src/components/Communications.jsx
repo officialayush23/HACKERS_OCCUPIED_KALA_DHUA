@@ -105,7 +105,7 @@ export default function Communications({ revision, incidentId }) {
       <div className="col-span-8 flex min-h-0 flex-col">
         {current && (
           <>
-            <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2.5">
+            <div className="flex shrink-0 items-center gap-2 border-b px-6 py-4">
               <div>
                 <div className="text-[13.5px] font-medium">{current.counterparty_name}</div>
                 <div className="text-muted-foreground text-[11px]">{current.subject}</div>
@@ -116,7 +116,7 @@ export default function Communications({ revision, incidentId }) {
             </div>
 
             <ScrollArea className="min-h-0 flex-1">
-              <div className="flex flex-col gap-3 p-4">
+              <div className="flex flex-col gap-4 p-5">
                 {current.messages.map((m, i) => {
                   const a = AUTHOR[m.author_type] ?? AUTHOR.supplier
                   const mine = m.direction === 'outbound'

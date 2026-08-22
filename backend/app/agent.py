@@ -21,7 +21,7 @@ import asyncio
 import json
 from typing import Any
 
-from . import comms, llm
+from . import comms, learning, llm
 from .core import (APPROVAL_THRESHOLD_INR, CLOCK, broadcast_state, db, emit,
                    next_incident_id, run_context)
 from .risk import assess
@@ -216,12 +216,12 @@ async def _investigate(conn, incident_id: str) -> None:
         st["confidence"] = "low"
         await conn.execute(
             "update incidents set confidence='low' where id=$1", incident_id)
-        await conn.execute(
-            """update supplier_memory
-                  set contradictions_detected = contradictions_detected + 1,
-                      derived_reliability = greatest(0.05, derived_reliability - 0.25),
-                      updated_at = now()
-                where supplier_id=$1""", c["supplier_id"])
+        await learning.record(
+            conn, c["supplier_id"], "contradiction",
+            incident_id=incident_id,
+            reason=(f"Claimed '{c['supplier_claim']}' on {c['id']} while the carrier "
+                    f"showed '{c['tracking_status']}'."),
+            detail={"po_id": c["id"]})
         await emit(conn, incident_id=incident_id, actor="agent",
                    event_type="CLAIM_CONTRADICTED",
                    human_summary=verdict["reasoning"],
@@ -370,20 +370,34 @@ async def _plan_and_validate(conn, incident_id: str) -> None:
     # ---- policy gate -------------------------------------------------------
     if chosen["requires_approval"]:
         await _set_status(conn, incident_id, "awaiting_approval")
+        imp = chosen.get("impact")
+        if chosen.get("kind") == "reschedule_other" and imp:
+            reason = (f"Delays {imp['product_name']} for {imp['oem_customer']} by "
+                      f"{imp['delay_days']} days")
+            blocked_line = (
+                f"This costs almost nothing in money and {imp['delay_days']} days of "
+                f"{imp['oem_customer']}'s time. Delaying another customer is not mine "
+                f"to decide. Stopping for approval.")
+            waiting = (f"Waiting for a human — this would push {imp['oem_customer']}'s "
+                       f"order back {imp['delay_days']} days.")
+        else:
+            reason = f"Exceeds the Rs {APPROVAL_THRESHOLD_INR:,} autonomous limit"
+            blocked_line = (f"Rs {chosen['total_cost']:,.0f} exceeds my "
+                            f"Rs {APPROVAL_THRESHOLD_INR:,} authority. "
+                            f"Stopping for human approval.")
+            waiting = (f"Waiting for a human — Rs {chosen['total_cost']:,.0f} "
+                       f"is over my spending authority.")
+
         await conn.execute(
             """insert into approvals (incident_id, action, estimated_cost, reason, brief, status)
                values ($1,$2,$3,$4,$5,'pending')""",
-            incident_id, chosen["label"], chosen["total_cost"],
-            f"Exceeds the Rs {APPROVAL_THRESHOLD_INR:,} autonomous limit", narrative)
-        await _step(conn, incident_id,
-                    f"Rs {chosen['total_cost']:,.0f} exceeds my Rs {APPROVAL_THRESHOLD_INR:,} "
-                    f"authority. Stopping for human approval.", status="blocked")
+            incident_id, chosen["label"], chosen["total_cost"], reason, narrative)
+        await _step(conn, incident_id, blocked_line, status="blocked")
         await emit(conn, incident_id=incident_id, actor="agent",
-                   event_type="APPROVAL_REQUIRED",
-                   human_summary=f"Waiting for a human — Rs {chosen['total_cost']:,.0f} "
-                                 f"is over my spending authority.",
+                   event_type="APPROVAL_REQUIRED", human_summary=waiting,
                    payload={"cost": chosen["total_cost"],
-                            "threshold": APPROVAL_THRESHOLD_INR})
+                            "threshold": APPROVAL_THRESHOLD_INR,
+                            "kind": chosen.get("kind"), "impact": imp})
         await broadcast_state("approval_required", {"incident_id": incident_id})
         return
 
@@ -401,6 +415,42 @@ async def execute(conn, incident_id: str) -> None:
         return
 
     await _set_status(conn, incident_id, "executing")
+
+    # A reschedule releases units before anything is bought — the residual we
+    # then purchase is smaller precisely because the other run stood down.
+    impact = chosen.get("impact")
+    if chosen.get("kind") == "reschedule_other" and impact:
+        row = await conn.fetchrow(
+            """update production_orders
+                  set deadline           = deadline + make_interval(days => $2),
+                      original_deadline  = coalesce(original_deadline, deadline),
+                      rescheduled_at     = now(),
+                      rescheduled_reason = $3,
+                      allocated_units    = 0
+                where id = $1 and allocated_units > 0
+            returning deadline, allocated_units""",
+            impact["production_order_id"], int(impact["delay_days"]),
+            f"Released {impact['units_freed']} units to incident {incident_id}")
+        if row is None:
+            await _step(conn, incident_id,
+                        f"{impact['product_name']} was already rescheduled by someone else — "
+                        f"its units are no longer mine to spend. Replanning.",
+                        status="warning")
+            await _plan_and_validate(conn, incident_id)
+            return
+        await emit(conn, incident_id=incident_id, actor="agent",
+                   event_type="PRODUCTION_RESCHEDULED",
+                   human_summary=(
+                       f"{impact['product_name']} for {impact['oem_customer']} pushed back "
+                       f"{impact['delay_days']} days, releasing {impact['units_freed']} units."),
+                   payload={**impact, "now_due": row["deadline"].isoformat()})
+        await _step(conn, incident_id,
+                    f"Stood {impact['product_name']} down for {impact['delay_days']} days. "
+                    f"{impact['units_freed']} units released; "
+                    + (f"buying the remaining {impact['residual_units']}."
+                       if impact["residual_units"] > 0
+                       else "nothing needs to be bought."))
+
     created = []
     for line in chosen.get("lines", []):
         po_id = f"PO-A{await conn.fetchval('select count(*)+9000 from purchase_orders')}"

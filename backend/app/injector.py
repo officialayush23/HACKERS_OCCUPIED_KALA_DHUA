@@ -11,6 +11,7 @@ import json
 from datetime import timedelta
 from typing import Any
 
+from . import learning
 from .core import (CLOCK, broadcast_state, db, emit, next_incident_id,
                     run_context, set_run_context)
 from .scenarios import SCENARIOS
@@ -85,12 +86,10 @@ async def apply_event(conn, etype: str, params: dict[str, Any],
             params.get("body",
                        f"Due to transport issues, delivery may be delayed by "
                        f"{days}-{days + 2} days. We are trying to resolve this."))
-        await conn.execute(
-            """update supplier_memory
-                  set promises_made = promises_made + 1,
-                      avg_delay_days = (avg_delay_days + $2) / 2,
-                      updated_at = now()
-                where supplier_id = $1""", po["supplier_id"], days)
+        await learning.record(
+            conn, po["supplier_id"], "promise_made",
+            reason=f"Announced a {days}-day slip on {po['id']}.",
+            delay_days=days, detail={"po_id": po["id"], "delay_days": days})
         iid = incident_id or await _ensure_incident(
             conn, itype="supplier_delay", component_id=po["component_id"],
             po_id=po_id, severity="high",
@@ -163,12 +162,10 @@ async def apply_event(conn, etype: str, params: dict[str, Any],
         if contradiction:
             sup = await conn.fetchval(
                 "select supplier_id from purchase_orders where id=$1", po_id)
-            await conn.execute(
-                """update supplier_memory
-                      set contradictions_detected = contradictions_detected + 1,
-                          derived_reliability = greatest(0.05, derived_reliability - 0.25),
-                          updated_at = now()
-                    where supplier_id = $1""", sup)
+            await learning.record(
+                conn, sup, "contradiction",
+                reason=f"Carrier tracking contradicted the dispatch claim on {po_id}.",
+                detail={"po_id": po_id})
             summary = (f"CONTRADICTION on {po_id}: supplier claims "
                        f"'{row['supplier_claim']}' but carrier shows '{status}'.")
             await emit(conn, incident_id=iid, actor="injector",
@@ -239,12 +236,10 @@ async def apply_event(conn, etype: str, params: dict[str, Any],
     if etype == "quality_failure":
         sid, q = params["supplier_id"], float(params["new_quality_score"])
         await conn.execute("update suppliers set quality_score=$2 where id=$1", sid, q)
-        await conn.execute(
-            """update supplier_memory
-                  set quality_failures = quality_failures + 1,
-                      derived_reliability = greatest(0.05, derived_reliability - 0.15),
-                      updated_at = now()
-                where supplier_id=$1""", sid)
+        await learning.record(
+            conn, sid, "quality_failure",
+            reason=f"Failed incoming inspection; quality score now {q}.",
+            detail={"new_quality_score": q})
         iid = incident_id or await _ensure_incident(
             conn, itype="quality_failure", component_id=None, po_id=None, severity="high")
         summary = f"{sid} failed incoming inspection; quality score now {q}."

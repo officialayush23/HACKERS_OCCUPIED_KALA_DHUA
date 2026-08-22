@@ -22,6 +22,7 @@ export const api = {
   world:       ()          => req('/api/world'),
   kpis:        ()          => req('/api/kpis'),
   network:     ()          => req('/api/network'),
+  now:         ()          => req('/api/now'),
   incidents:   ()          => req('/api/incidents'),
   audit:       (after = 0) => req(`/api/audit?after=${after}&limit=300`),
 
@@ -55,5 +56,7 @@ export const api = {
     `/api/solve/${po}?record=${rec ? 'true' : 'false'}` +
     (exclude.length ? `&exclude=${exclude.join(',')}` : '')),
   runs:        ()          => req('/api/runs'),
+  reschedule:  (b)         => post('/api/production/reschedule', b),
+  supplierTrust: (id)      => req(`/api/suppliers/${id}/reliability`),
   score:       (id)        => post(`/api/runs/${id}/score`),
 }

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'motion/react'
-import { AlertTriangle, Factory, Package, ShieldCheck, Truck } from 'lucide-react'
+import { AlertTriangle, Factory, History, Package, ShieldCheck, Truck } from 'lucide-react'
 import { api } from '@/lib/api'
 import { inr } from '@/lib/format'
 import { Badge } from '@/components/ui/badge'
@@ -87,6 +87,18 @@ function HoverCard({ hover }) {
                 </div>
                 <div className={`font-mono text-[15px] ${trustTone(data.trust)}`}>
                   {data.trust.toFixed(2)}
+                  {data.prior != null && Math.abs(data.trust - data.prior) > 0.005 && (
+                    <span className={`ml-1 text-[10px] ${
+                      data.trust > data.prior ? 'text-ok' : 'text-danger'}`}>
+                      {data.trust > data.prior ? '\u2191' : '\u2193'}
+                      {Math.abs(data.trust - data.prior).toFixed(2)}
+                    </span>
+                  )}
+                </div>
+                <div className="text-muted-foreground text-[9.5px]">
+                  {data.onTime + data.late > 0
+                    ? `${data.onTime} on time \u00b7 ${data.late} late`
+                    : 'no deliveries yet'}
                 </div>
               </div>
               <div>
@@ -116,8 +128,45 @@ function HoverCard({ hover }) {
               </div>
             )}
 
+            {data.trustMoves?.length > 0 && (
+              <div className="mt-3">
+                <div className="text-muted-foreground text-[9.5px] tracking-[0.1em] uppercase">
+                  Why the score moved
+                </div>
+                <div className="mt-1.5 flex flex-col gap-1.5">
+                  {data.trustMoves.map((m, i) => (
+                    <div key={i} className="flex items-start gap-1.5 text-[10.5px] leading-snug">
+                      <span className={`shrink-0 font-mono ${
+                        m.delta > 0 ? 'text-ok' : m.delta < 0 ? 'text-danger'
+                                                             : 'text-muted-foreground'}`}>
+                        {m.delta > 0 ? '+' : ''}{m.delta.toFixed(2)}
+                      </span>
+                      <span className="text-muted-foreground">{m.reason}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {data.actions?.length > 0 && (
+              <div className="mt-3">
+                <div className="text-muted-foreground flex items-center gap-1 text-[9.5px]
+                                tracking-[0.1em] uppercase">
+                  <History className="size-2.5" />What the agent did
+                </div>
+                <div className="mt-1.5 flex flex-col gap-1.5">
+                  {data.actions.map((a, i) => (
+                    <div key={i} className="flex items-start gap-1.5 text-[10.5px] leading-snug">
+                      <span className="bg-primary/60 mt-[6px] size-1 shrink-0 rounded-full" />
+                      <span className="text-muted-foreground">{a.summary}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {data.components?.filter(Boolean).length > 0 && (
-              <div className="mt-2">
+              <div className="mt-3">
                 <div className="text-muted-foreground text-[9.5px] tracking-[0.1em] uppercase">
                   Supplies
                 </div>
@@ -262,6 +311,9 @@ export default function NetworkFlow({ revision, highlight = [] }) {
       modes: l.s.modes ?? [], components: l.s.components ?? [],
       componentNames: (l.s.components ?? []).filter(Boolean),
       shipments: l.shipments,
+      actions: l.s.actions ?? [], trustMoves: l.s.trust_moves ?? [],
+      onTime: l.s.deliveries_on_time ?? 0, late: l.s.deliveries_late ?? 0,
+      prior: l.s.seeded_prior != null ? Number(l.s.seeded_prior) : null,
     },
   })
 

@@ -293,70 +293,94 @@ rather than inventing a recovery.
 
 ---
 
-## T9 — Production ↔ Procurement loop  (the strategic one)
+## T9 — Production ↔ Procurement loop  ✅ done
 
-Without this the system only knows one answer: *buy more*.
+Until this, the agent had exactly one answer to a shortage: **buy more**. Now it has a second
+lever — ask whether a lower-priority run can wait, and spend the freed units instead of money.
 
-```
-SHORTAGE → ask production planner → "can we delay the lower-priority order?"
-        → component demand recalculates → agent replans procurement
-```
+**How it is modelled honestly.** Usable stock is a shared pool, and each open run holds a claim
+on it (`production_orders.allocated_units`). A shortfall may only count stock nobody else has
+claimed. Releasing a claim is exactly what a reschedule does — no hand-waving about units
+appearing from nowhere.
 
-- [ ] `production_reschedule` tool
-- [ ] Solver gains a real reschedule option: delay Order B, need 200 not 460, avoid air freight
-- [ ] Requires Plant Manager approval when it delays another customer order
+- [x] `allocated_units`, `original_deadline`, `rescheduled_at`, `rescheduled_reason` on
+      `production_orders`
+- [x] `NEED_SQL` is allocation-aware: available = pool − claims held by other live runs
+- [x] `RESCHEDULE_SQL` finds runs that could stand down — strictly lower priority, holding units,
+      and with real slack in their own deadline (the delay we ask for *is* that slack, capped at
+      14 days)
+- [x] New option kind `reschedule_other`, scored on the same weights as everything else, with the
+      residual purchase costed inside it
+- [x] **Always requires approval**, however little it costs — the delay lands on another
+      customer, and that is not a trade an agent makes alone. The approval reason says so in
+      those words instead of quoting a spending limit.
+- [x] `POST /api/production/reschedule` for the operator-driven path; agent-driven execution
+      stands the run down *before* buying the smaller residual, and replans if someone else
+      rescheduled it first
+- [x] `PRODUCTION_RESCHEDULED` audit event, and the reschedule re-wakes the agent so it never
+      holds a stale plan
+- [x] Decision Explorer: "Where units come from" credits the released stock, and a **"Who else
+      pays"** row names the customer and the days — the cost that is not money
+- [x] Seed: **PROD-888**, low-priority aftermarket spares for Shakti Auto, holding 300 units of
+      COMP-104 with 17 days of slack
 
-This is what separates a **procurement agent** from an **operations agent**. Worth doing the
-moment T1–T6 are stable.
-
----
-
-## T10 — Stretch
-
-- [ ] **Supplier learning loop** — promised 2 days, took 6 → reliability drops → future decisions change
-- [ ] **Ask the Agent** chat — read / control / constrain / approve / investigate.
-      Constraints must pass deterministic authorisation, and must invalidate the current plan.
-- [ ] **Policy loop** — temporary limit raise (₹250k for 24h) makes a rejected plan executable
-- [ ] **OEM negotiation** — "can you accept 24h late?" turns time into a lever alongside cost
-- [ ] Notification → acknowledgement → escalation chain
-
----
-
-## Performance
-
-- [ ] `asyncio.gather` for the evidence pack — 4×500ms sequential becomes ~500ms
-- [ ] Redis cache: supplier catalog · component metadata · map locations · active incident summary · agent task state
-- [ ] **Never cache:** inventory truth · financial state · audit events. Supabase stays source of truth.
-- [ ] Redis LangCache on extraction/classification LLM calls only — never on decisions
-
----
-
-## shadcn components to install
-
-```bash
-npx shadcn@latest add sheet dialog dropdown-menu tooltip sonner avatar \
-  skeleton alert command popover switch collapsible resizable sidebar
-```
-
-| Component | Used for |
-|---|---|
-| `sidebar` | Grouped nav — the whole T7 restructure |
-| `sheet` | Incident drawer, communication thread |
-| `switch` + `dropdown-menu` | Light/dark toggle |
-| `sonner` | Agent notifications ("contradiction detected") |
-| `command` | ⌘K jump to component / supplier / incident |
-| `dialog` | Approval modal |
-| `skeleton` | Loading states — kills the "Loading network…" text |
-| `alert` | Critical production risk banner |
-| `avatar` | Message thread participants |
-| `tooltip` · `popover` · `collapsible` · `resizable` | Detail on demand, split panes |
+Verified end to end: for PROD-882 the loop produces *"Delay Smart Controller Unit for Shakti Auto
++ buy 160"* at **₹43,200 / score 0.657**, beating the cheapest straight purchase at **₹86,700 /
+score 0.582** — and still stops for a human.
 
 ---
 
-## Seed data — rich, but invisible
+## T10 — Supplier learning loop  ✅ done
 
-Expand to ~4 products, 12 components, 15 suppliers, 8 production orders, 6 shipments.
-Add message history and past incidents so supplier reliability has real provenance.
+Trust used to be a one-way ratchet: every contradiction subtracted 0.25, every quality failure
+0.15, and nothing ever earned any of it back. A supplier who slipped once in March stayed
+punished forever, and one who quietly delivered forty times on schedule accumulated no credit.
 
-**Do not build a UI to browse seed data.** The user should only ever see the *consequences* of
-it. One line in the footer is enough: *"Simulating NEXA Mobility Systems · Pune Plant · 15 suppliers."*
+- [x] `supplier_trust()` — the arithmetic lives in **SQL**, so Python can never drift from it.
+      Laplace-smoothed keep rate toward the seeded prior, minus 0.20 per contradiction, 0.10 per
+      quality failure, 0.02 per average day late
+- [x] `reliability_events` — every movement with a before, an after, and a reason. Without it the
+      score is an opinion; with it, it is an argument the operator can check
+- [x] `app/learning.py` — the **only** writer of `supplier_memory`. Three call sites that each
+      hand-rolled their own subtraction now record what happened and let the score follow
+- [x] `on_goods_received()` closes the loop: on-time delivery is the one event that raises trust,
+      measured in hours against the promise, never truncated days
+- [x] `supplier_effective` recomputes rather than reading whatever the last subtraction left
+- [x] `GET /api/suppliers/{id}/reliability` returns the score *and* its history
+- [x] `SUPPLIER_LEARNED` audit events, and hover cards that show why the number moved
+
+---
+
+## UX pass — from system console to operations copilot
+
+The critique was right: the product exposed what the agent was doing rather than answering what
+an operator actually asks. Reordered around **situation → impact → recommendation → your action
+→ evidence**.
+
+- [x] **NOW bar** — persistent strip: what needs you, what the agent is doing, days of cover,
+      next delivery. Always the same place, always the same question answered
+- [x] **Overview rebuilt into three zones** — left: an action *queue* (not a feed) that shrinks as
+      you work it; centre: one operational story with the have → need → short arithmetic in
+      plain numbers; right: what the AI is doing in three tenses — done, waiting on, next
+- [x] **⌘K command bar** — "Ask the Agent" was a page you had to leave your work to reach, which
+      is backwards. Now it is one keystroke from anywhere, does navigation too, and shows what
+      the answer was grounded in
+- [x] **Navigation regrouped** by user question, not architecture: Operations · AI agent ·
+      Execution · Governance
+- [x] **Whitespace pass** — panel headers and card bodies were all running dense; loosened
+      consistently across every screen
+- [x] **Hovers answer "and what did you do about it?"** — both the schematic and the Mapbox view
+      now show the agent's last five actions with that supplier, the delivery record, and why the
+      trust score moved
+
+### Still to do — the rest of the critique
+
+- [ ] Incident page as the main operational workspace (header → what changed → recommendation →
+      collapsed activity)
+- [ ] Decision Explorer led by the recommendation, with the scoring matrix behind a drill-down
+- [ ] Communications as an inbox: `Needs reply` / `AI conversations` / `Warehouse` tabs, and an
+      explicit autonomous / draft-only / human-takeover mode per thread
+- [ ] Warehouse reduced to *My Tasks* — a warehouse operator should never see a weighted score
+- [ ] Network dims everything not on the affected path when a disruption is live
+- [ ] Audit Trail split into Business / Agent / Technical views
+- [ ] Simulation transport controls — play, pause, speed, scrub

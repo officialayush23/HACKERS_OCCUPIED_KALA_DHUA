@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useQuery } from '@tanstack/react-query'
 import {
-  AlertTriangle, Clock, IndianRupee, ShieldCheck, Sparkles, TriangleAlert, Truck,
+  AlertTriangle, FlaskConical, IndianRupee, ShieldCheck, Sparkles, Truck,
 } from 'lucide-react'
 import { Sidebar, Topbar, Stat, ALL_NAV } from '@/components/Shell'
 import AgentActivity from '@/components/AgentActivity'
@@ -10,13 +10,17 @@ import IncidentPanel from '@/components/IncidentPanel'
 import Communications from '@/components/Communications'
 import WarehouseOps from '@/components/WarehouseOps'
 import Approvals from '@/components/Approvals'
-import AskAgent from '@/components/AskAgent'
 import NetworkFlow from '@/components/NetworkFlow'
 import ControlPanel from '@/components/ControlPanel'
 import EventTimeline from '@/components/EventTimeline'
 import WorldState from '@/components/WorldState'
 import DecisionExplorer from '@/components/DecisionExplorer'
 import RunHistory from '@/components/RunHistory'
+import NowBar from '@/components/NowBar'
+import ActionQueue from '@/components/ActionQueue'
+import AgentStatus from '@/components/AgentStatus'
+import CommandBar, { CommandBarTrigger } from '@/components/CommandBar'
+import SimulationDrawer from '@/components/SimulationDrawer'
 import { useAgentStream } from '@/lib/useAgentStream'
 import { useTheme } from '@/lib/useTheme'
 import { api } from '@/lib/api'
@@ -85,95 +89,137 @@ function LiveNetwork({ revision }) {
 }
 
 const SUBTITLE = {
-  command:   'What is happening, where, and whether you need to step in',
+  command:   'What needs you, what is happening, and what the agent is doing about it',
   network:   'Supplier lanes, live shipments and contradictions',
   incidents: 'Everything the agent is holding',
   decisions: 'What the solver chose, and everything it refused',
-  approvals: 'Only what crosses the agent’s authority reaches you',
-  audit:     'Append-only event log, streamed live',
-  ask:       'Answers from live operational state',
+  approvals: 'Only what crosses the agent\u2019s authority reaches you',
+  audit:     'Every action the agent took, and the evidence behind it',
   comms:     'Supplier, warehouse and carrier conversations',
-  scoring:   'Runs scored against the judges’ own formula',
+  scoring:   'Runs scored against the judges\u2019 own formula',
   warehouse: 'Physical reality at Pune Plant',
 }
 
-function CommandCenter({ events, revision, status, onGoto }) {
+function Overview({ events, revision, onGoto }) {
   const { data: kpi } = useQuery({
     queryKey: ['kpis', revision], queryFn: api.kpis, refetchInterval: 4000 })
   const { data: ctx } = useQuery({ queryKey: ['context'], queryFn: api.context })
+  const { data: now } = useQuery({
+    queryKey: ['now'], queryFn: api.now, refetchInterval: 3000 })
 
-  const worst = (ctx?.production ?? [])
+  const incident = (now?.incidents ?? [])[0] ?? null
+  const order = (ctx?.production ?? [])
     .filter((p) => p.shortfall > 0)
-    .sort((a, b) => a.shortfall - b.shortfall)[0]
-
-  const cover = kpi?.min_coverage_days ?? null
-  const critical = kpi?.critical_incidents ?? 0
+    .sort((a, b) => b.shortfall - a.shortfall)[0]
+  const cover = now?.min_coverage_days ?? null
 
   return (
     <div className="grid h-full grid-cols-12">
-      <ScrollArea className="col-span-8 min-h-0">
-       <div className="flex min-h-full flex-col p-5">
-        {/* hero — three numbers, big, no card clutter */}
-        <div className="glass grid grid-cols-3 gap-8 rounded-xl px-6 py-5">
-          <Stat label="Production risk" icon={TriangleAlert}
-                value={critical > 0 ? `${critical} critical` : (kpi?.open_incidents || 0) + ' open'}
-                sub={critical ? 'a line will stop' : 'nothing urgent'}
-                tone={critical ? 'text-danger' : ''} pulse={critical > 0} />
-          <Stat label="Production cover" icon={Clock}
-                value={cover != null ? `${cover.toFixed(1)} days` : '—'}
-                sub={worst ? `${worst.component_name} is tightest` : 'all components healthy'}
-                tone={cover != null && cover < 3 ? 'text-danger'
-                      : cover != null && cover < 6 ? 'text-warn' : ''} />
-          <Stat label="Committed recovery" icon={IndianRupee}
-                value={inr(kpi?.agent_spend_inr ?? 0)}
-                sub={`authority ${inr(kpi?.approval_threshold ?? 150000)}`} />
-        </div>
+      {/* LEFT — what needs me */}
+      <div className="col-span-3 min-h-0 border-r">
+        <ActionQueue onGoto={onGoto} />
+      </div>
 
-        <div className="mt-3 flex flex-wrap items-center gap-3 px-1">
-          <Badge variant="outline" className="gap-1.5 text-[11px]">
-            <Truck className="size-3" />{kpi?.delayed_pos ?? 0} delayed shipments
-          </Badge>
-          <Badge variant="outline" className="gap-1.5 text-[11px]">
-            <ShieldCheck className="size-3" />{kpi?.contradictions_caught ?? 0} supplier claims caught
-          </Badge>
-          {(kpi?.erp_gap_units ?? 0) > 0 && (
-            <Badge variant="outline"
-                   className="border-warn/40 bg-warn/10 text-warn gap-1.5 text-[11px]">
-              <AlertTriangle className="size-3" />ERP overstates by {kpi.erp_gap_units} units
-            </Badge>
+      {/* CENTRE — one operational story */}
+      <ScrollArea className="col-span-6 min-h-0">
+        <div className="flex min-h-full flex-col gap-6 p-7">
+          {incident ? (
+            <div>
+              <div className="flex items-center gap-2.5">
+                <span className={`size-2 rounded-full ${
+                  incident.severity === 'critical' ? 'bg-danger animate-pulse'
+                  : incident.severity === 'high' ? 'bg-warn' : 'bg-info'}`} />
+                <span className="text-muted-foreground text-[10px] font-medium
+                                 tracking-[0.14em] uppercase">
+                  {incident.severity} · {incident.status.replace(/_/g, ' ')}
+                </span>
+              </div>
+              <h2 className="mt-2.5 text-[26px] leading-tight font-semibold tracking-tight">
+                {incident.title ?? `${incident.component_name} shortage`}
+              </h2>
+              <p className="text-muted-foreground mt-2 text-[14px] leading-relaxed">
+                {cover != null
+                  ? `Production stops in ${cover.toFixed(1)} days unless this is recovered.`
+                  : 'Assessing production impact.'}
+                {order && ` ${order.product_name ?? order.id} for ${order.oem_customer}.`}
+              </p>
+            </div>
+          ) : (
+            <div>
+              <div className="flex items-center gap-2.5">
+                <span className="bg-ok size-2 rounded-full" />
+                <span className="text-muted-foreground text-[10px] font-medium
+                                 tracking-[0.14em] uppercase">all clear</span>
+              </div>
+              <h2 className="mt-2.5 text-[26px] leading-tight font-semibold tracking-tight">
+                Nothing threatens production
+              </h2>
+              <p className="text-muted-foreground mt-2 text-[14px] leading-relaxed">
+                Every component is covered. Inject a disruption to watch the agent wake up.
+              </p>
+            </div>
           )}
-        </div>
 
-        <Card className="mt-4 min-h-[330px] gap-0 overflow-hidden py-0">
-          <div className="flex items-center gap-2 border-b px-4 py-2.5">
-            <h2 className="text-muted-foreground text-[10px] font-medium
-                           tracking-[0.14em] uppercase">Inbound supply network</h2>
-            <Button variant="ghost" size="sm" onClick={() => onGoto('network')}
-                    className="text-muted-foreground ml-auto h-6 px-2 text-[11px]">
-              open ↗
-            </Button>
+          {/* the chain, in one line of plain arithmetic */}
+          {order && (
+            <div className="glass flex items-center gap-5 rounded-xl px-6 py-5">
+              {[
+                ['have', `${order.usable_stock} usable`, 'physically counted'],
+                ['need', `${order.units_planned} units`, order.component_name],
+                ['short by', `${order.shortfall}`, 'agent is recovering this'],
+              ].map(([k, v, sub], i) => (
+                <div key={k} className="flex min-w-0 items-center gap-5">
+                  {i > 0 && <span className="text-muted-foreground/50 shrink-0">→</span>}
+                  <div className="min-w-0">
+                    <div className="text-muted-foreground text-[9.5px] font-medium
+                                    tracking-[0.12em] uppercase">{k}</div>
+                    <div className={`mt-1 font-mono text-[22px] leading-none tabular-nums
+                      ${k === 'short by' ? 'text-danger' : ''}`}>{v}</div>
+                    <div className="text-muted-foreground mt-1.5 truncate text-[11px]">{sub}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-3">
+            <Badge variant="outline" className="gap-1.5 py-1 text-[11.5px]">
+              <Truck className="size-3" />{kpi?.delayed_pos ?? 0} delayed shipments
+            </Badge>
+            <Badge variant="outline" className="gap-1.5 py-1 text-[11.5px]">
+              <ShieldCheck className="size-3" />{kpi?.contradictions_caught ?? 0} claims caught
+            </Badge>
+            <Badge variant="outline" className="gap-1.5 py-1 text-[11.5px]">
+              <IndianRupee className="size-3" />{inr(kpi?.agent_spend_inr ?? 0)} committed
+            </Badge>
+            {(kpi?.erp_gap_units ?? 0) > 0 && (
+              <Badge variant="outline"
+                     className="border-warn/40 bg-warn/10 text-warn gap-1.5 py-1 text-[11.5px]">
+                <AlertTriangle className="size-3" />ERP overstates by {kpi.erp_gap_units} units
+              </Badge>
+            )}
           </div>
-          <div className="h-[310px]"><NetworkFlow revision={revision} /></div>
-        </Card>
 
-        <Card className="mt-4 min-h-[300px] flex-1 gap-0 overflow-hidden py-0">
-          <AgentActivity events={events} />
-        </Card>
-       </div>
+          {/* the recommendation, if there is one */}
+          <IncidentPanel revision={revision} onOpenDecision={() => onGoto('decisions')} />
+
+          <Card className="min-h-[280px] flex-1 gap-0 overflow-hidden py-0">
+            <div className="flex items-center gap-2.5 border-b px-6 py-4">
+              <h2 className="text-muted-foreground text-[10px] font-medium
+                             tracking-[0.14em] uppercase">Inbound supply network</h2>
+              <Button variant="ghost" size="sm" onClick={() => onGoto('network')}
+                      className="text-muted-foreground ml-auto h-6 px-2 text-[11px]">
+                open ↗
+              </Button>
+            </div>
+            <div className="h-[300px]"><NetworkFlow revision={revision} /></div>
+          </Card>
+        </div>
       </ScrollArea>
 
-      <div className="glass-panel col-span-4 flex min-h-0 flex-col border-l">
-        <div className="border-b px-4 py-2.5">
-          <h2 className="text-muted-foreground text-[10px] font-medium
-                         tracking-[0.14em] uppercase">Live incident</h2>
-        </div>
-        <ScrollArea className="min-h-0 flex-1">
-          <IncidentPanel revision={revision} onOpenDecision={() => onGoto('decisions')} />
-        </ScrollArea>
-        <Separator />
-        <ScrollArea className="h-[42%] min-h-0">
-          <div className="p-4"><ControlPanel /></div>
-        </ScrollArea>
+      {/* RIGHT — what the AI is doing */}
+      <div className="glass-panel col-span-3 min-h-0 border-l">
+        <AgentStatus events={events} onGoto={onGoto} />
       </div>
     </div>
   )
@@ -183,6 +229,8 @@ export default function App() {
   const { events, clock, status, revision } = useAgentStream()
   const { theme, toggle } = useTheme()
   const [page, setPage] = useState('command')
+  const [cmdOpen, setCmdOpen] = useState(false)
+  const [simOpen, setSimOpen] = useState(false)
   const meta = ALL_NAV.find((n) => n.id === page)
 
   const { data: kpi } = useQuery({
@@ -212,6 +260,11 @@ export default function App() {
           clock={clock} theme={theme} onToggleTheme={toggle}
           right={
             <>
+              <Button variant="outline" size="sm" onClick={() => setSimOpen(true)}
+                      className="h-8 gap-1.5 px-2.5 text-[12px] font-normal">
+                <FlaskConical className="size-3.5" />Run simulation
+              </Button>
+              <CommandBarTrigger onClick={() => setCmdOpen(true)} />
               {llm && (
                 <Badge variant="outline" className={`gap-1.5 text-[10.5px] ${llm.ok
                   ? 'border-primary/40 bg-primary/10 text-primary' : ''}`}>
@@ -231,14 +284,15 @@ export default function App() {
           }
         />
 
+        <NowBar onGoto={setPage} />
+
         <AnimatePresence mode="wait">
           <motion.div key={page}
             initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
             transition={{ duration: 0.18 }} className="min-h-0 flex-1 overflow-hidden">
 
             {page === 'command' && (
-              <CommandCenter events={events} revision={revision} status={status}
-                             onGoto={setPage} />
+              <Overview events={events} revision={revision} onGoto={setPage} />
             )}
 
             {page === 'network' && <LiveNetwork revision={revision} />}
@@ -256,7 +310,9 @@ export default function App() {
 
             {page === 'decisions' && (
               <div className="grid h-full grid-cols-12">
-                <div className="col-span-8 min-h-0 border-r"><DecisionExplorer /></div>
+                <div className="col-span-8 min-h-0 border-r">
+                  <DecisionExplorer onApprove={() => setPage('approvals')} />
+                </div>
                 <div className="glass-panel col-span-4 min-h-0">
                   <IncidentPanel revision={revision} />
                 </div>
@@ -266,7 +322,6 @@ export default function App() {
             {page === 'approvals' && <Approvals revision={revision} />}
             {page === 'comms' && <Communications revision={revision} />}
             {page === 'warehouse' && <WarehouseOps revision={revision} />}
-            {page === 'ask' && <AskAgent />}
 
             {page === 'audit' && (
               <div className="grid h-full grid-cols-12">
@@ -289,6 +344,9 @@ export default function App() {
             )}
           </motion.div>
         </AnimatePresence>
+        <CommandBar open={cmdOpen} onOpenChange={setCmdOpen}
+                    pages={ALL_NAV} onGoto={setPage} />
+        <SimulationDrawer open={simOpen} onOpenChange={setSimOpen} />
       </SidebarInset>
     </SidebarProvider>
    </TooltipProvider>

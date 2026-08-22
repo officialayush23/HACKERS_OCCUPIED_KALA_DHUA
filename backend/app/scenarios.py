@@ -140,6 +140,36 @@ SCENARIOS: dict[str, Scenario] = {
 }
 
 
+#: Plain language for each injected event, so an operator choosing a scenario can
+#: see exactly what will be fed in rather than reading a params blob.
+_EVENT_PROSE = {
+    "supplier_delay":       lambda p: f"{p.get('po_id')} slips by {p.get('delay_days')} days",
+    "inventory_correction": lambda p: (f"physical count of {p.get('component_id')} comes back at "
+                                       f"{p.get('usable_stock')} usable"),
+    "supplier_claim":       lambda p: f"supplier claims {p.get('po_id')} is '{p.get('claim')}'",
+    "tracking_state":       lambda p: (f"carrier tracking for {p.get('po_id')} shows "
+                                       f"'{p.get('tracking_status')}'"),
+    "demand_spike":         lambda p: (f"daily usage of {p.get('component_id')} jumps to "
+                                       f"{p.get('daily_usage')}"),
+    "priority_change":      lambda p: (f"{p.get('production_order_id')} is raised to "
+                                       f"{p.get('priority')} priority"),
+    "deadline_pull_in":     lambda p: (f"{p.get('production_order_id')} deadline pulled in to "
+                                       f"{p.get('hours_from_now')}h from now"),
+    "quality_failure":      lambda p: (f"{p.get('supplier_id')} fails incoming inspection "
+                                       f"(quality {p.get('new_quality_score')})"),
+    "expedite_unavailable": lambda p: f"expedited freight unavailable — {p.get('reason')}",
+    "hazmat_disruption":    lambda p: f"{p.get('po_id')} is blocked as hazmat",
+}
+
+
+def _prose(ev: dict[str, Any]) -> str:
+    fn = _EVENT_PROSE.get(ev["type"])
+    try:
+        return fn(ev.get("params", {})) if fn else ev["type"].replace("_", " ")
+    except Exception:                      # never let a label break the list
+        return ev["type"].replace("_", " ")
+
+
 def list_scenarios() -> list[dict[str, Any]]:
     return [
         {
@@ -148,6 +178,12 @@ def list_scenarios() -> list[dict[str, Any]]:
             "tests": s["tests"],
             "event_count": len(s["events"]),
             "span_sim_hours": max((e.get("at_h", 0) for e in s["events"]), default=0),
+            # What actually gets fed in, in order, in words.
+            "feed": [
+                {"at_h": e.get("at_h", 0), "type": e["type"],
+                 "what": _prose(e), "note": e.get("note")}
+                for e in s["events"]
+            ],
         }
         for s in SCENARIOS.values()
     ]

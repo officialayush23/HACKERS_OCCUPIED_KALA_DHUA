@@ -58,6 +58,8 @@ class Option:
     score: float = 0.0
     requires_approval: bool = False
     rationale: str = ""
+    # Set only by reschedule_other: who pays for this in something other than money.
+    impact: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -202,7 +204,8 @@ def _line(c: dict, qty: int) -> Line:
 
 def solve(*, candidates: list[dict], shortfall: int, deadline, required_certs: list[str],
           is_hazmat: bool, priority: str, baseline_unit_price: float,
-          budget_spent: float = 0.0) -> dict[str, Any]:
+          budget_spent: float = 0.0,
+          reschedulable: list[dict] | None = None) -> dict[str, Any]:
     """Return ranked options plus every rejection with its reason."""
 
     now = CLOCK.now()
@@ -277,6 +280,52 @@ def solve(*, candidates: list[dict], shortfall: int, deadline, required_certs: l
         options.append(_score(opt, shortfall=shortfall, hours_left=hours_left,
                               baseline_value=baseline_value, priority=priority))
 
+    # --- stand a lower-priority run down and spend its units instead of money ---
+    #
+    # This is the only lever here that is not procurement. It always needs a
+    # human: the units are free, but the delay lands on another customer, and
+    # that is not a trade an agent gets to make by itself.
+    for r in (reschedulable or []):
+        freed = min(int(r["allocated_units"]), shortfall)
+        if freed <= 0:
+            continue
+        residual = shortfall - freed
+        lines, buy_cost, arrival = [], 0.0, 0.0
+
+        if residual > 0:
+            viable = [c for c in pool if c["available_quantity"] >= residual]
+            if not viable:
+                continue                      # cannot finish the job; not an option
+            best = min(viable, key=lambda c: (c["lead_time_hours"],
+                                              c["unit_price"] * residual + c["freight_cost"]))
+            ln = _line(best, residual)
+            lines, buy_cost, arrival = [ln], ln.total_cost, ln.lead_time_hours
+
+        delay_days = r.get("delay_days", 7)
+        who = r.get("oem_customer") or "another customer"
+        what = r.get("product_name") or r["id"]
+        opt = Option(
+            kind="reschedule_other", lines=lines, total_cost=buy_cost,
+            units_covered=shortfall, arrival_hours=arrival,
+            label=(f"Delay {what} for {who}"
+                   + (f" + buy {residual}" if residual > 0 else "")),
+            rationale=(f"{what} for {who} is {r['priority']} priority and holds {freed} "
+                       f"units. Standing it down for {delay_days} days covers "
+                       + (f"{freed} of the {shortfall}, leaving {residual} to buy."
+                          if residual > 0
+                          else f"the whole shortfall with nothing bought.")),
+            impact={"production_order_id": r["id"], "oem_customer": who,
+                    "product_name": what, "priority": r["priority"],
+                    "units_freed": freed, "delay_days": delay_days,
+                    "residual_units": residual,
+                    "new_deadline": None},
+        )
+        options.append(_score(opt, shortfall=shortfall, hours_left=hours_left,
+                              baseline_value=baseline_value, priority=priority))
+        # Delaying another customer is never inside the agent's authority,
+        # however little it costs.
+        options[-1].requires_approval = True
+
     options.sort(key=lambda o: o.score, reverse=True)
     chosen = options[0] if options else None
 
@@ -296,8 +345,9 @@ def solve(*, candidates: list[dict], shortfall: int, deadline, required_certs: l
 # ------------------------------------------------------------- data load ---
 
 # Joins supplier_effective, never suppliers. `suppliers.reliability_score` is a
-# seeded prior; `supplier_memory.derived_reliability` is authoritative. Reading
-# both and picking one at the call site is how two scores silently compete.
+# seeded prior; the score the solver acts on is computed by supplier_trust() from
+# what the supplier actually did. Reading both and picking one at the call site
+# is how two scores silently compete.
 CANDIDATE_SQL = """
 select sc.supplier_id,
        se.name as supplier_name,
@@ -312,6 +362,9 @@ select sc.supplier_id,
  where sc.component_id = $1
 """
 
+# Usable stock is a shared pool. Another run that already holds a claim on it
+# is not stock we may spend, so `usable_stock` here is net of every competing
+# claim. Releasing one of those claims is exactly what a reschedule does.
 NEED_SQL = """
 select po.id as production_order_id,
        po.required_component as component_id,
@@ -319,13 +372,46 @@ select po.id as production_order_id,
        po.priority::text as priority,
        po.deadline,
        po.units_planned * po.component_per_unit as required_units,
-       i.usable_stock, i.erp_stock, i.safety_stock, i.daily_usage,
+       i.usable_stock - coalesce(other.claimed, 0) as usable_stock,
+       i.usable_stock as pool_stock,
+       coalesce(other.claimed, 0) as claimed_by_others,
+       i.erp_stock, i.safety_stock, i.daily_usage,
        c.required_certifications, c.is_hazmat, c.baseline_unit_price
   from production_orders po
   join inventory i on i.component_id = po.required_component
                   and i.warehouse_id = po.warehouse_id
   join components c on c.id = po.required_component
+  left join lateral (
+        select sum(o.allocated_units) as claimed
+          from production_orders o
+         where o.required_component = po.required_component
+           and o.warehouse_id       = po.warehouse_id
+           and o.id <> po.id
+           and not o.is_on_hold
+  ) other on true
  where po.id = $1
+"""
+
+# Runs that could stand down so this one can run. Lower priority than ours,
+# holding units we could use, and with enough slack that delaying them is a
+# scheduling decision rather than a second crisis.
+RESCHEDULE_SQL = """
+select o.id, o.oem_customer, o.priority::text as priority, o.allocated_units,
+       o.deadline, pr.name as product_name,
+       o.units_planned * o.component_per_unit as own_requirement
+  from production_orders o
+  left join products pr on pr.id = o.product_id
+ where o.required_component = $1
+   and o.warehouse_id       = $2
+   and o.id <> $3
+   and not o.is_on_hold
+   and o.allocated_units > 0
+   and o.deadline > $4
+   and case o.priority when 'low' then 1 when 'medium' then 2
+                       when 'high' then 3 else 4 end
+     < case $5::text  when 'low' then 1 when 'medium' then 2
+                       when 'high' then 3 else 4 end
+ order by o.allocated_units desc
 """
 
 
@@ -346,7 +432,7 @@ async def solve_for_production_order(
     shortfall = int(need["required_units"] - need["usable_stock"] + need["safety_stock"])
     if shortfall <= 0:
         return {"shortfall": shortfall, "chosen": None, "options": [], "rejections": [],
-                "suppliers_in_play": [], "excluded": [],
+                "suppliers_in_play": [], "excluded": [], "reschedulable": [],
                 "hours_left": round(hours_between(need["deadline"], CLOCK.now()), 2),
                 "note": "No shortfall — usable stock covers the run."}
 
@@ -358,6 +444,21 @@ async def solve_for_production_order(
     spent = float(await conn.fetchval(
         "select coalesce(sum(total_value),0) from purchase_orders where created_by_agent") or 0)
 
+    # Runs that could stand down. The delay we ask for is the slack they already
+    # have, capped at a fortnight — never a delay we cannot justify to the
+    # customer who is waiting on it.
+    resched_rows = await conn.fetch(
+        RESCHEDULE_SQL, need["component_id"], need["warehouse_id"],
+        production_order_id, need["deadline"], need["priority"])
+    reschedulable = []
+    for r in resched_rows:
+        slack_days = hours_between(r["deadline"], need["deadline"]) / 24.0
+        if slack_days < 1:
+            continue
+        d = dict(r)
+        d["delay_days"] = int(min(14, max(1, round(slack_days))))
+        reschedulable.append(d)
+
     result = solve(
         candidates=[dict(r) for r in rows],
         shortfall=shortfall,
@@ -367,15 +468,23 @@ async def solve_for_production_order(
         priority=need["priority"],
         baseline_unit_price=float(need["baseline_unit_price"]),
         budget_spent=spent,
+        reschedulable=reschedulable,
     )
     result["suppliers_in_play"] = [{"id": k, "name": v} for k, v in sorted(in_play.items())]
     result["excluded"] = dropped
+    result["reschedulable"] = [
+        {"id": r["id"], "oem_customer": r["oem_customer"], "priority": r["priority"],
+         "product_name": r["product_name"], "units_held": int(r["allocated_units"]),
+         "delay_days": r["delay_days"]}
+        for r in reschedulable]
     result["context"] = {
         "production_order_id": production_order_id,
         "component_id": need["component_id"],
         "required_units": int(need["required_units"]),
         "usable_stock": int(need["usable_stock"]),
         "erp_stock": int(need["erp_stock"]),
+        "pool_stock": int(need["pool_stock"]),
+        "claimed_by_others": int(need["claimed_by_others"]),
         "safety_stock": int(need["safety_stock"]),
         "daily_usage": int(need["daily_usage"]),
         "priority": need["priority"],

@@ -98,7 +98,7 @@ export default function EventTimeline({ events, status }) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="glass-panel sticky top-0 z-10 flex shrink-0 items-center justify-between border-b px-4 py-2.5">
+      <div className="glass-panel sticky top-0 z-10 flex shrink-0 items-center justify-between border-b px-6 py-4">
         <h2 className="text-xs font-semibold tracking-widest text-muted-foreground uppercase">
           Agent timeline
         </h2>

@@ -105,11 +105,14 @@ insert into supplier_catalog
   ('SUP-57', 'COMP-520', 428.00, 6,  700, 200);
 
 -- ---------- inventory -------------------------------------------------------
--- COMP-104: ERP says 800, only 390 usable. THIS IS SCENARIO 2.
+-- COMP-104: ERP says 1100, only 690 usable. THIS IS SCENARIO 2.
+-- Of those 690, PROD-888 already holds 300 — so the critical line may only
+-- count on 390, and its shortfall is still exactly 460. Standing PROD-888 down
+-- is what releases the other 300.
 -- Coverage on usable stock = 390 / 90 = 4.3 days.
 
 insert into inventory (component_id, warehouse_id, erp_stock, usable_stock, daily_usage, safety_stock) values
-  ('COMP-104', 'Pune-Plant-1', 800, 390,  90, 150),
+  ('COMP-104', 'Pune-Plant-1',1100, 690,  90, 150),
   ('COMP-207', 'Pune-Plant-1', 420, 420,  40,  80),
   ('COMP-311', 'Pune-Plant-1', 950, 950, 120, 200),
   ('COMP-402', 'Pune-Plant-1', 310, 310,  55, 120),
@@ -118,16 +121,24 @@ insert into inventory (component_id, warehouse_id, erp_stock, usable_stock, dail
 
 -- ---------- production ------------------------------------------------------
 -- PROD-882 is the pressure source: 700 units of COMP-104 due in 6 days.
--- Shortfall = 700 - 390 usable + 150 safety floor = 460 units.
+-- Shortfall = 700 - 390 available + 150 safety floor = 460 units.
+--
+-- "Available" is not the same as "in the building". The pool holds 690, but
+-- PROD-888 — low-priority aftermarket spares for Shakti Auto, not due for
+-- another 17 days — has already claimed 300 of them. That claim is what makes
+-- the production <-> procurement loop real: the agent can ask for it back
+-- instead of buying its way out, and a human has to agree to the delay.
 
 insert into production_orders
-  (id, product, required_component, units_planned, component_per_unit, deadline, priority, warehouse_id) values
-  ('PROD-882','Smart Controller Unit',   'COMP-104', 700, 1, now() + interval '6 days',  'high',     'Pune-Plant-1'),
-  ('PROD-883','Battery Mgmt System',     'COMP-207', 380, 1, now() + interval '9 days',  'critical', 'Pune-Plant-1'),
-  ('PROD-884','Smart Controller Unit',   'COMP-118', 700, 3, now() + interval '6 days',  'high',     'Pune-Plant-1'),
-  ('PROD-885','Telematics Unit',         'COMP-402', 500, 1, now() + interval '11 days', 'medium',   'Pune-Plant-1'),
-  ('PROD-886','Instrument Cluster',      'COMP-520', 450, 1, now() + interval '14 days', 'low',      'Pune-Plant-1'),
-  ('PROD-887','Battery Mgmt System',     'COMP-311', 380, 2, now() + interval '9 days',  'critical', 'Pune-Plant-1');
+  (id, product, required_component, units_planned, component_per_unit, deadline, priority, warehouse_id, oem_customer, allocated_units) values
+  ('PROD-882','Smart Controller Unit',   'COMP-104', 700, 1, now() + interval '6 days',  'high',     'Pune-Plant-1', 'Bharat EV Motors',   0),
+  ('PROD-883','Battery Mgmt System',     'COMP-207', 380, 1, now() + interval '9 days',  'critical', 'Pune-Plant-1', 'Bharat EV Motors',   0),
+  ('PROD-884','Smart Controller Unit',   'COMP-118', 700, 3, now() + interval '6 days',  'high',     'Pune-Plant-1', 'Bharat EV Motors',   0),
+  ('PROD-885','Telematics Unit',         'COMP-402', 500, 1, now() + interval '11 days', 'medium',   'Pune-Plant-1', 'Shakti Auto',        0),
+  ('PROD-886','Instrument Cluster',      'COMP-520', 450, 1, now() + interval '14 days', 'low',      'Pune-Plant-1', 'Shakti Auto',        0),
+  ('PROD-887','Battery Mgmt System',     'COMP-311', 380, 2, now() + interval '9 days',  'critical', 'Pune-Plant-1', 'Bharat EV Motors',   0),
+  -- the run the agent can ask to stand down
+  ('PROD-888','Smart Controller Unit',   'COMP-104', 300, 1, now() + interval '17 days', 'low',      'Pune-Plant-1', 'Shakti Auto',      300);
 
 -- ---------- open purchase orders --------------------------------------------
 -- PO-7712 is the one SUP-21 will delay, then lie about.
