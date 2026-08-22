@@ -316,6 +316,10 @@ async def _run(scenario_id: str, run_id: int) -> None:
         raise
     finally:
         _running.pop(scenario_id, None)
+        if not _running:
+            # Nothing is happening any more. Freeze the world rather than let it
+            # drift a simulated month past its own delivery dates.
+            CLOCK.pause()
 
 
 async def inject(scenario_id: str) -> dict[str, Any]:
@@ -334,6 +338,7 @@ async def inject(scenario_id: str) -> dict[str, Any]:
                    human_summary=f"Scenario {scenario_id} injected: "
                                  f"{SCENARIOS[scenario_id]['title']}",
                    payload={"scenario_id": scenario_id, "run_id": run_id})
+    CLOCK.start()                      # time only passes while something happens
     _running[scenario_id] = asyncio.create_task(_run(scenario_id, run_id))
     await broadcast_state("scenario_started",
                           {"scenario_id": scenario_id, "run_id": run_id})
@@ -348,3 +353,4 @@ async def stop_all() -> None:
     for task in list(_running.values()):
         task.cancel()
     _running.clear()
+    CLOCK.pause()

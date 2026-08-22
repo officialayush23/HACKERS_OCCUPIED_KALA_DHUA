@@ -199,6 +199,16 @@ async def reset(mode: str = "demo"):
                 "truncate run_scores, scenario_runs, audit_events restart identity cascade")
     set_run_context(None)
     CLOCK.reset()
+
+    # A demo reset re-seeds the world but deliberately keeps the audit log. Without
+    # a marker in that log there is no way to tell which events describe the world
+    # that exists now — which is how the activity feed ends up narrating a run that
+    # was wiped, while every other panel correctly reports an empty world.
+    async with pool.acquire() as conn:
+        await emit(conn, actor="system", event_type="WORLD_RESET",
+                   human_summary=f"World re-seeded ({mode}). Everything above this line "
+                                 f"describes a previous run.",
+                   payload={"mode": mode})
     await HUB.broadcast({"kind": "world_reset", "mode": mode, "clock": CLOCK.state()})
     return {"ok": True, "mode": mode,
             "history_preserved": mode == "demo", "clock": CLOCK.state()}
@@ -245,9 +255,21 @@ async def incidents():
 
 @app.get("/api/audit")
 async def audit(incident_id: str | None = None, run_id: int | None = None,
-                after: int = 0, limit: int = 300):
+                after: int = 0, limit: int = 300, since_reset: bool = True):
+    """The log for the world that exists now, unless you ask for everything.
+
+    `since_reset=true` (the default) returns only events after the most recent
+    WORLD_RESET. The full history is still there — pass `since_reset=false` to
+    read it — but a dashboard showing a reset run's events beside a freshly
+    seeded world is worse than showing nothing.
+    """
     pool = await db()
     async with pool.acquire() as conn:
+        if since_reset and run_id is None:
+            mark = await conn.fetchval(
+                "select max(sequence) from audit_events where event_type='WORLD_RESET'")
+            if mark:
+                after = max(after, int(mark))
         if run_id is not None:
             rows = await conn.fetch(
                 """select * from audit_events
@@ -875,13 +897,45 @@ async def now_state():
                  left join components c on c.id = p.component_id
                 where p.status in ('open','in_transit')
                 order by p.expected_delivery limit 1""")
+        # ONE definition of "is production at risk", used by every panel. Three
+        # panels each computing their own is how the dashboard came to say
+        # "all clear" and "short by 310" at the same time.
+        at_risk = await conn.fetch(
+            """select po.id, po.priority::text as priority, po.oem_customer, po.deadline,
+                      pr.name as product_name,
+                      c.id as component_id, c.display_name as component_name,
+                      po.units_planned * po.component_per_unit as required_units,
+                      i.usable_stock - coalesce(other.claimed,0) as available,
+                      i.erp_stock, i.safety_stock, i.daily_usage,
+                      po.units_planned * po.component_per_unit
+                        - (i.usable_stock - coalesce(other.claimed,0)) + i.safety_stock
+                        as shortfall,
+                      case when i.daily_usage > 0
+                           then round((i.usable_stock - coalesce(other.claimed,0))::numeric
+                                      / i.daily_usage, 1) end as coverage_days
+                 from production_orders po
+                 join inventory i on i.component_id = po.required_component
+                                 and i.warehouse_id = po.warehouse_id
+                 join components c on c.id = po.required_component
+                 left join products pr on pr.id = po.product_id
+                 left join lateral (
+                       select sum(o.allocated_units) as claimed
+                         from production_orders o
+                        where o.required_component = po.required_component
+                          and o.warehouse_id = po.warehouse_id
+                          and o.id <> po.id and not o.is_on_hold
+                 ) other on true
+                where not po.is_on_hold
+                  and po.units_planned * po.component_per_unit
+                      - (i.usable_stock - coalesce(other.claimed,0)) + i.safety_stock > 0
+                order by shortfall desc""")
         cover = await conn.fetchval(
             """select min(case when daily_usage > 0
                                then usable_stock::numeric / daily_usage else 999 end)
                  from inventory""")
         working = await conn.fetchval(
             """select count(*) from incidents
-                where status in ('investigating','planning','executing')""")
+                where status not in ('resolved','failed')""")
 
     def _cover(v):
         return round(float(v), 1) if v is not None else None
@@ -906,11 +960,20 @@ async def now_state():
                       "title": f"Waiting on {w['counterparty_name']}",
                       "detail": w["subject"], "cta": "View"})
 
+    risk = [dict(r) for r in at_risk]
+    # The tightest cover that actually belongs to something at risk. A global
+    # minimum across every component answers a question nobody asked.
+    at_risk_cover = min((r["coverage_days"] for r in risk
+                         if r["coverage_days"] is not None), default=None)
+
     return {
         "clock": CLOCK.state(),
         "queue": queue,
         "incidents": [dict(r) for r in incidents],
-        "min_coverage_days": _cover(cover),
+        "at_risk": risk,
+        "production_at_risk": len(risk) > 0,
+        "worst": risk[0] if risk else None,
+        "min_coverage_days": _cover(at_risk_cover if risk else cover),
         "agent_busy": int(working or 0),
         "next_delivery": (
             {"po_id": next_delivery["id"],

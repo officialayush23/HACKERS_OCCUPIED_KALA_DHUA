@@ -95,6 +95,34 @@ Open the dashboard and click **Run simulation** in the top bar.
 The drawer shows every built-in scenario, **what it feeds in and when**, in plain language.
 Pick one and press Run. One real second is one simulated hour.
 
+### Two windows — the demo that matters
+
+The agent does not "get" a stock figure because the demo hands it one. It has to ask a
+**different human at a different screen**, and wait.
+
+| Window | URL | Who |
+|---|---|---|
+| Operations | `http://localhost:5173/` | The supply-chain manager |
+| Warehouse | `http://localhost:5173/warehouse` | The floor at Pune Plant |
+
+Open both side by side. Run a scenario in the first; a task appears in the second within a
+second, over the same WebSocket. Type a count that contradicts the ERP, press **Send to the
+agent**, and watch the plan change in the first window.
+
+The warehouse portal is deliberately plainer — one question: what do I need to do right now.
+No scores, no supplier risk, no audit trail.
+
+**The agent never writes warehouse truth.** It raises a task, a human answers, the answer
+becomes evidence, the world updates, the agent observes. An agent that could set
+`usable_stock` itself would only be pretending to verify anything.
+
+### The simulated clock
+
+**Time only passes while a scenario is running.** One real second is one simulated hour while
+something is happening; the clock is frozen otherwise. This matters — a free-running clock
+silently ages the world while the dashboard sits open, and after fifteen idle minutes every
+seeded delivery date is a simulated month in the past and every ETA reads negative.
+
 ### The seven built-in scenarios
 
 | Scenario | What it tests |

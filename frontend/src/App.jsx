@@ -106,10 +106,12 @@ function Overview({ events, revision, onGoto }) {
   const { data: now } = useQuery({
     queryKey: ['now'], queryFn: api.now, refetchInterval: 3000 })
 
+  // One source of truth. Reading risk from `incidents` while reading the numbers
+  // from `context` is what let this screen say "all clear" and "short by 310"
+  // in the same breath.
+  const atRisk = now?.production_at_risk ?? false
+  const order = now?.worst ?? null
   const incident = (now?.incidents ?? [])[0] ?? null
-  const order = (ctx?.production ?? [])
-    .filter((p) => p.shortfall > 0)
-    .sort((a, b) => b.shortfall - a.shortfall)[0]
   const cover = now?.min_coverage_days ?? null
 
   return (
@@ -122,19 +124,20 @@ function Overview({ events, revision, onGoto }) {
       {/* CENTRE — one operational story */}
       <ScrollArea className="col-span-6 min-h-0">
         <div className="flex min-h-full flex-col gap-6 p-7">
-          {incident ? (
+          {atRisk ? (
             <div>
               <div className="flex items-center gap-2.5">
                 <span className={`size-2 rounded-full ${
-                  incident.severity === 'critical' ? 'bg-danger animate-pulse'
-                  : incident.severity === 'high' ? 'bg-warn' : 'bg-info'}`} />
+                  cover != null && cover < 3 ? 'bg-danger animate-pulse' : 'bg-warn'}`} />
                 <span className="text-muted-foreground text-[10px] font-medium
                                  tracking-[0.14em] uppercase">
-                  {incident.severity} · {incident.status.replace(/_/g, ' ')}
+                  {incident
+                    ? `${incident.severity} · ${incident.status.replace(/_/g, ' ')}`
+                    : 'detected · agent is picking this up'}
                 </span>
               </div>
               <h2 className="mt-2.5 text-[26px] leading-tight font-semibold tracking-tight">
-                {incident.title ?? `${incident.component_name} shortage`}
+                {order?.component_name ?? incident?.component_name} shortage
               </h2>
               <p className="text-muted-foreground mt-2 text-[14px] leading-relaxed">
                 {cover != null
@@ -163,9 +166,10 @@ function Overview({ events, revision, onGoto }) {
           {order && (
             <div className="glass flex items-center gap-5 rounded-xl px-6 py-5">
               {[
-                ['have', `${order.usable_stock} usable`, 'physically counted'],
-                ['need', `${order.units_planned} units`, order.component_name],
-                ['short by', `${order.shortfall}`, 'agent is recovering this'],
+                ['have', `${order.available} usable`, 'net of other runs\u2019 claims'],
+                ['need', `${order.required_units} units`, order.component_name],
+                ['short by', `${order.shortfall}`,
+                 incident ? 'agent is recovering this' : 'agent is waking up'],
               ].map(([k, v, sub], i) => (
                 <div key={k} className="flex min-w-0 items-center gap-5">
                   {i > 0 && <span className="text-muted-foreground/50 shrink-0">→</span>}

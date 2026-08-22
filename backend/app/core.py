@@ -58,27 +58,51 @@ class SimClock:
 
     Every deadline comparison in the solver goes through `now()`. Nothing in
     the codebase may call datetime.now() directly for business logic.
+
+    **The clock is paused unless a scenario is running.** This is not a detail:
+    a free-running clock silently ages the world while the dashboard sits open,
+    so after fifteen idle minutes every seeded delivery date is a month in the
+    past, every ETA reads negative, and the screen fills with nonsense that has
+    nothing to do with the agent. Time passes when something is happening.
     """
 
     real_start: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     sim_start: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     seconds_per_sim_hour: float = SECONDS_PER_SIM_HOUR
-    running: bool = True
+    running: bool = False
+    # Simulated hours banked from previous running stretches.
+    _banked_hours: float = 0.0
+
+    def _live_hours(self) -> float:
+        if not self.running:
+            return 0.0
+        real_elapsed = (datetime.now(timezone.utc) - self.real_start).total_seconds()
+        return real_elapsed / self.seconds_per_sim_hour
 
     def now(self) -> datetime:
-        if not self.running:
-            return self.sim_start
-        real_elapsed = (datetime.now(timezone.utc) - self.real_start).total_seconds()
-        sim_hours = real_elapsed / self.seconds_per_sim_hour
-        return self.sim_start + timedelta(hours=sim_hours)
+        return self.sim_start + timedelta(hours=self._banked_hours + self._live_hours())
 
     def elapsed_sim_hours(self) -> float:
-        return (self.now() - self.sim_start).total_seconds() / 3600.0
+        return self._banked_hours + self._live_hours()
+
+    def start(self) -> None:
+        """Resume from where we paused, without losing the elapsed simulation."""
+        if self.running:
+            return
+        self.real_start = datetime.now(timezone.utc)
+        self.running = True
+
+    def pause(self) -> None:
+        if not self.running:
+            return
+        self._banked_hours += self._live_hours()
+        self.running = False
 
     def reset(self) -> None:
         self.real_start = datetime.now(timezone.utc)
         self.sim_start = datetime.now(timezone.utc)
-        self.running = True
+        self._banked_hours = 0.0
+        self.running = False
 
     def state(self) -> dict[str, Any]:
         return {

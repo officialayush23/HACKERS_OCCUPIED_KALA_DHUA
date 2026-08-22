@@ -52,6 +52,10 @@ export default function NowBar({ onGoto }) {
   const cover = data?.min_coverage_days
   const busy = data?.agent_busy ?? 0
   const nd = data?.next_delivery
+  const atRisk = data?.production_at_risk ?? false
+  const worst = data?.worst ?? null
+  // A delivery date behind the simulated clock is overdue, not "in -39 days".
+  const overdue = nd && nd.hours_away < 0
 
   return (
     <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
@@ -70,11 +74,13 @@ export default function NowBar({ onGoto }) {
 
       <Separator orientation="vertical" className="!h-8" />
 
-      <Item icon={Bot} tone={busy ? 'text-primary' : ''}
+      <Item icon={Bot} tone={busy || atRisk ? 'text-primary' : ''}
             value={busy > 0
               ? `Agent working ${busy} incident${busy > 1 ? 's' : ''}`
-              : 'Agent idle'}
-            sub={busy > 0 ? 'investigating and replanning' : 'nothing at risk'}
+              : atRisk ? 'Agent picking this up' : 'Agent idle'}
+            sub={busy > 0 ? 'investigating and replanning'
+                 : atRisk ? `${worst?.component_name ?? 'a component'} is short`
+                 : 'nothing at risk'}
             onClick={() => onGoto('incidents')} />
 
       <Separator orientation="vertical" className="!h-8" />
@@ -83,14 +89,22 @@ export default function NowBar({ onGoto }) {
             tone={cover != null && cover < 3 ? 'text-danger'
                   : cover != null && cover < 6 ? 'text-warn' : ''}
             value={cover != null ? `${cover.toFixed(1)} days of cover` : 'Cover unknown'}
-            sub={critical > 0 ? `${critical} critical incident open` : 'tightest component'} />
+            sub={atRisk ? `${worst?.component_name ?? 'component'} \u2014 short ${worst?.shortfall ?? 0}`
+                 : critical > 0 ? `${critical} critical incident open`
+                 : 'tightest component'} />
 
       <Separator orientation="vertical" className="!h-8" />
 
       <Item icon={PackageCheck}
-            value={nd ? `${nd.supplier_name} in ${(nd.hours_away / 24).toFixed(1)}d`
-                      : 'No inbound deliveries'}
-            sub={nd ? `${nd.quantity} × ${nd.component_name}` : 'nothing in transit'}
+            tone={overdue ? 'text-danger' : ''}
+            value={!nd ? 'No inbound deliveries'
+                   : overdue
+                     ? `${nd.supplier_name} overdue`
+                     : `${nd.supplier_name} in ${(nd.hours_away / 24).toFixed(1)}d`}
+            sub={!nd ? 'nothing in transit'
+                 : overdue
+                   ? `${Math.abs(nd.hours_away / 24).toFixed(1)}d past its promised date`
+                   : `${nd.quantity} \u00d7 ${nd.component_name}`}
             onClick={() => onGoto('network')} />
 
       {waitingOn.length > 0 && (
