@@ -1,0 +1,53 @@
+# ---- Secrets & credentials (never commit) ----
+API KEYS/
+api keys/
+API_KEYS/
+secrets/
+.env
+.env.*
+!.env.example
+*.env
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+service-account*.json
+*api*key*.csv
+*api*key*.txt
+bedrock-long-term-api-key.csv
+
+# ---- Dependencies ----
+node_modules/
+.pnp
+.pnp.js
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# ---- Build output ----
+dist/
+dist-ssr/
+build/
+.vite/
+*.local
+
+# ---- Logs ----
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# ---- Editors / OS ----
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# ---- Supabase ----
+.supabase/
+supabase/.temp/

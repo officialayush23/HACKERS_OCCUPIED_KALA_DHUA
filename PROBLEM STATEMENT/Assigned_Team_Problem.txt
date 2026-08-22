@@ -1,0 +1,50 @@
+=== Hackers Occupied Pune 2026 // kala dhua ===
+WATERMARK: HOP 2026 OFFICIAL PS // TEAM TRACE // SCREENSHOT WATERMARK // DO NOT SOLVE FROM IMAGE
+AI / AGENTIC SYSTEMS: Supply Chain Disruption Control Agent
+DIFFICULTY: HARD
+DOMAIN: LOGISTICS & SUPPLY CHAIN DISRUPTION
+TARGET: AUTOMATED INCIDENT TRIAGE & RE-ROUTING ENGINE
+
+SUMMARY:
+Build an autonomous or human-in-the-loop AI agentic system capable of dynamic supply chain disruption detection, inventory allocation, and automated multi-modal shipment re-routing under real-time network constraints.
+
+CORE REQUIREMENTS:
+- Dynamic Event Monitoring & Severity Triage Engine
+- Multi-Modal Re-Routing & Inventory Re-Allocation Logic
+- Real-Time Tool Execution & Constraint Checking
+- Comprehensive Audit Trail & Explainability Output
+
+TECH STACK & CONSTRAINTS:
+Node.js / Python, Web Framework of choice, LLM APIs (OpenAI / Anthropic / Gemini / Local Model), REST API or CLI Interface.
+
+FULL OFFICIAL PROBLEM STATEMENT:
+# Supply Chain Disruption Control Agent
+
+## Overview
+Global supply chains face frequent disruptions due to extreme weather, geopolitical port congestion, and unexpected supplier outages. Traditional ERP/SCM platforms rely on manual human intervention to recalculate routes and reallocate inventory, resulting in high SLA penalties and revenue loss.
+
+Your objective is to build an intelligent, autonomous agent system that continuously monitors incoming disruption feeds, evaluates constraint impacts across logistics nodes, generates optimal remediation workflows, and executes dynamic re-routing decisions with full audit transparency.
+
+## Core Capabilities Required
+
+### 1. Disruption Ingestion & Triage
+- Ingest real-time alert events (port closures, weather anomalies, carrier delays, supplier downtime).
+- Classify severity (Low, Medium, High, Critical) and determine impacted orders, inventory batches, and shipment corridors.
+
+### 2. Multi-Modal Re-Routing & Optimization
+- Evaluate alternate transport modes (Air, Sea, Rail, Road) against SLA delivery windows and cost constraints.
+- Re-allocate warehouse inventory dynamically when primary supply nodes fail.
+
+### 3. Tool Execution & Constraint Validation
+- Use agent tools / function calls to query inventory APIs, route distance estimators, and carrier rate tables.
+- Enforce strict constraints (e.g., maximum budget overhead, hazardous material transport rules, customer priority tiers).
+
+### 4. Audit Trail & Human-in-the-Loop Safeguards
+- Output human-readable reasoning logs explaining why a specific mitigation route was chosen over alternatives.
+- Flag high-cost (> $50,000 impact) or high-risk decisions for explicit human coordinator approval.
+
+## Deliverables & Scoring Criteria
+- Autonomous Decision Accuracy & Constraint Compliance: 40%
+- System Architecture, Tool Design & Agent Robustness: 30%
+- Real-Time Simulation Handling & Edge Case Resilience: 20%
+- Audit Logging, Transparency & UX/CLI Interfaces: 10%

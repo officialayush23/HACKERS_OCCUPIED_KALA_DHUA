@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>*{margin:0;padding:0}</style>
+</head>
+<body>
+<title>Disruption Agent Field Manual</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+
+<style>
+:root{
+  --paper:#F3F4F1; --surface:#FFFFFF; --surface-2:#EAECE7; --surface-3:#E1E5DF;
+  --ink:#1A1F1D; --ink-2:#4A524E; --ink-3:#767F7A;
+  --rule:#D4D9D2; --rule-strong:#B9C1B9;
+  --accent:#0F5E5A; --accent-ink:#0B4A47; --accent-soft:#DBE9E6;
+  --brass:#8A6A16; --brass-soft:#F0E7CE;
+  --crit:#A32A21; --crit-soft:#F6E1DE;
+  --warn:#8A5A00; --warn-soft:#F6EAD3;
+  --ok:#2E6B45; --ok-soft:#DDEEE3;
+  --shadow:0 1px 0 rgba(26,31,29,.04), 0 8px 24px -18px rgba(26,31,29,.35);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#0F1413; --surface:#161C1A; --surface-2:#1D2422; --surface-3:#242C29;
+    --ink:#E9EDEA; --ink-2:#A9B3AF; --ink-3:#7C8681;
+    --rule:#28312E; --rule-strong:#3A4441;
+    --accent:#5FC7BE; --accent-ink:#8FDCD5; --accent-soft:#153331;
+    --brass:#D7B15C; --brass-soft:#332B14;
+    --crit:#EC8175; --crit-soft:#3A1D19;
+    --warn:#DCA748; --warn-soft:#372A11;
+    --ok:#74C494; --ok-soft:#16301F;
+    --shadow:0 1px 0 rgba(0,0,0,.3), 0 10px 28px -20px rgba(0,0,0,.9);
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0F1413; --surface:#161C1A; --surface-2:#1D2422; --surface-3:#242C29;
+  --ink:#E9EDEA; --ink-2:#A9B3AF; --ink-3:#7C8681;
+  --rule:#28312E; --rule-strong:#3A4441;
+  --accent:#5FC7BE; --accent-ink:#8FDCD5; --accent-soft:#153331;
+  --brass:#D7B15C; --brass-soft:#332B14;
+  --crit:#EC8175; --crit-soft:#3A1D19;
+  --warn:#DCA748; --warn-soft:#372A11;
+  --ok:#74C494; --ok-soft:#16301F;
+  --shadow:0 1px 0 rgba(0,0,0,.3), 0 10px 28px -20px rgba(0,0,0,.9);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:"Source Serif 4", Georgia, "Times New Roman", serif;
+  font-size:17px; line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1120px; margin:0 auto; padding:0 24px 96px;}
+.col{max-width:70ch;}
+
+/* ---------- masthead ---------- */
+.mast{
+  border-bottom:2px solid var(--ink); padding:40px 0 22px; margin-bottom:8px;
+}
+.mast .tag{
+  font-family:"IBM Plex Mono", ui-monospace, monospace; font-size:11px; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--ink-3); display:flex; flex-wrap:wrap; gap:6px 18px;
+}
+.mast h1{
+  font-family:"Archivo", "Helvetica Neue", Arial, sans-serif;
+  font-weight:700; font-size:clamp(34px,6vw,58px); line-height:1.02; letter-spacing:-.025em;
+  margin:16px 0 10px; text-wrap:balance;
+}
+.mast .sub{font-size:19px; color:var(--ink-2); max-width:62ch; margin:0;}
+
+/* ---------- toc ---------- */
+nav.toc{
+  margin:28px 0 44px; padding:18px 20px; border:1px solid var(--rule); background:var(--surface);
+  border-radius:2px; box-shadow:var(--shadow);
+}
+nav.toc ol{
+  list-style:none; margin:0; padding:0; display:grid; gap:2px 28px;
+  grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
+  font-family:"IBM Plex Mono", monospace; font-size:13px;
+}
+nav.toc a{color:var(--ink-2); text-decoration:none; display:flex; gap:10px; padding:4px 0;}
+nav.toc a:hover,nav.toc a:focus{color:var(--accent-ink); text-decoration:underline;}
+nav.toc .n{color:var(--accent); font-weight:600;}
+
+/* ---------- sections ---------- */
+section{margin:0 0 72px; scroll-margin-top:18px;}
+.shead{display:flex; align-items:baseline; gap:14px; border-top:1px solid var(--ink); padding-top:14px; margin-bottom:22px;}
+.shead .n{
+  font-family:"IBM Plex Mono",monospace; font-size:12px; font-weight:600; letter-spacing:.1em;
+  color:var(--accent); background:var(--accent-soft); padding:3px 8px; border-radius:2px; white-space:nowrap;
+}
+h2{
+  font-family:"Archivo",Arial,sans-serif; font-weight:700; font-size:clamp(24px,3.4vw,34px);
+  letter-spacing:-.02em; line-height:1.12; margin:0; text-wrap:balance;
+}
+h3{
+  font-family:"Archivo",Arial,sans-serif; font-weight:600; font-size:20px; letter-spacing:-.01em;
+  margin:36px 0 10px; color:var(--ink);
+}
+h4{
+  font-family:"IBM Plex Mono",monospace; font-weight:600; font-size:12px; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--ink-3); margin:28px 0 8px;
+}
+p{margin:0 0 14px;}
+ul,ol{margin:0 0 16px; padding-left:22px;}
+li{margin:0 0 7px;}
+li::marker{color:var(--accent);}
+strong{font-weight:600; color:var(--ink);}
+em{font-style:italic;}
+a{color:var(--accent-ink);}
+code, .mono{font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:.86em;}
+code{background:var(--surface-2); padding:1px 5px; border-radius:2px; color:var(--ink); word-break:break-word;}
+hr{border:0; border-top:1px solid var(--rule); margin:32px 0;}
+
+/* ---------- callouts ---------- */
+.callout{
+  border:1px solid var(--rule); border-left:3px solid var(--accent); background:var(--surface);
+  padding:16px 18px; border-radius:2px; margin:22px 0; box-shadow:var(--shadow);
+}
+.callout.hot{border-left-color:var(--crit);}
+.callout.brass{border-left-color:var(--brass);}
+.callout h4{margin-top:0;}
+.callout p:last-child,.callout ul:last-child{margin-bottom:0;}
+
+/* ---------- chips ---------- */
+.chip{
+  display:inline-flex; align-items:center; gap:6px; font-family:"IBM Plex Mono",monospace;
+  font-size:11px; font-weight:500; letter-spacing:.06em; text-transform:uppercase;
+  padding:3px 8px; border-radius:2px; border:1px solid transparent; white-space:nowrap;
+}
+.chip.c{background:var(--crit-soft); color:var(--crit); border-color:var(--crit);}
+.chip.w{background:var(--warn-soft); color:var(--warn); border-color:var(--warn);}
+.chip.g{background:var(--ok-soft); color:var(--ok); border-color:var(--ok);}
+.chip.a{background:var(--accent-soft); color:var(--accent-ink); border-color:var(--accent);}
+.chip.b{background:var(--brass-soft); color:var(--brass); border-color:var(--brass);}
+.chip.n{background:var(--surface-2); color:var(--ink-2); border-color:var(--rule-strong);}
+
+/* ---------- tables ---------- */
+.tw{overflow-x:auto; margin:20px 0 26px; border:1px solid var(--rule); border-radius:2px; background:var(--surface);}
+table{border-collapse:collapse; width:100%; min-width:620px; font-size:15px;}
+th,td{text-align:left; padding:10px 14px; border-bottom:1px solid var(--rule); vertical-align:top;}
+thead th{
+  font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--ink-3); background:var(--surface-2); border-bottom:1px solid var(--rule-strong); font-weight:600;
+  position:sticky; top:0;
+}
+tbody tr:last-child td{border-bottom:0;}
+tbody tr:hover td{background:var(--surface-2);}
+td.num{font-variant-numeric:tabular-nums; font-family:"IBM Plex Mono",monospace; font-size:13px; white-space:nowrap;}
+td.mono, th.mono{font-family:"IBM Plex Mono",monospace; font-size:13px;}
+
+/* ---------- cards ---------- */
+.grid{display:grid; gap:16px; margin:22px 0 28px;}
+.g2{grid-template-columns:repeat(auto-fit,minmax(290px,1fr));}
+.g3{grid-template-columns:repeat(auto-fit,minmax(230px,1fr));}
+.card{
+  background:var(--surface); border:1px solid var(--rule); border-radius:2px; padding:18px 18px 16px;
+  box-shadow:var(--shadow);
+}
+.card h5{
+  font-family:"Archivo",Arial,sans-serif; font-size:17px; font-weight:600; margin:8px 0 2px; letter-spacing:-.01em;
+}
+.card .role{
+  font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--ink-3); margin:0 0 12px;
+}
+.card dl{margin:0; font-size:15px;}
+.card dt{
+  font-family:"IBM Plex Mono",monospace; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--ink-3); margin-top:11px;
+}
+.card dd{margin:2px 0 0; color:var(--ink-2);}
+.card dd strong{color:var(--ink);}
+.card .note{font-size:15.5px; color:var(--ink-2); margin:6px 0 0;}
+.card .note em{color:var(--ink);}
+
+/* ---------- ledger (build vs fake) ---------- */
+.ledger{display:grid; gap:0; grid-template-columns:repeat(auto-fit,minmax(300px,1fr));
+  border:1px solid var(--rule-strong); border-radius:2px; overflow:hidden; margin:22px 0 28px;}
+.ledger > div{padding:18px 20px; background:var(--surface);}
+.ledger > div + div{border-left:1px solid var(--rule);}
+.ledger h4{margin-top:0;}
+.ledger ul{margin-bottom:0; padding-left:18px; font-size:15.5px;}
+@media (max-width:660px){ .ledger > div + div{border-left:0; border-top:1px solid var(--rule);} }
+
+/* ---------- timeline ---------- */
+.tl{list-style:none; padding:0; margin:20px 0 26px; border-left:2px solid var(--rule-strong);}
+.tl li{margin:0; padding:0 0 18px 20px; position:relative;}
+.tl li::before{
+  content:""; position:absolute; left:-6px; top:9px; width:9px; height:9px; border-radius:50%;
+  background:var(--accent); border:2px solid var(--paper);
+}
+.tl .t{font-family:"IBM Plex Mono",monospace; font-size:11.5px; letter-spacing:.08em; color:var(--ink-3); text-transform:uppercase;}
+.tl .d{display:block; margin-top:1px;}
+
+/* ---------- pipe / arch ---------- */
+pre.arch{
+  font-family:"IBM Plex Mono",monospace; font-size:12.5px; line-height:1.55; background:var(--surface);
+  border:1px solid var(--rule); border-radius:2px; padding:18px; overflow-x:auto; margin:22px 0 26px;
+  color:var(--ink-2); box-shadow:var(--shadow);
+}
+pre.arch b{color:var(--accent-ink); font-weight:600;}
+
+.foot{border-top:1px solid var(--rule); padding-top:20px; margin-top:64px; font-size:14px; color:var(--ink-3);}
+.foot a{color:var(--ink-2);}
+.srcs{columns:2; column-gap:32px; font-size:13.5px; line-height:1.55;}
+.srcs li{break-inside:avoid;}
+@media (max-width:640px){ .srcs{columns:1;} }
+
+:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
+@media (prefers-reduced-motion:no-preference){ html{scroll-behavior:smooth;} }
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <div class="tag">
+    <span>HOP 2026 // KALA DHUA</span>
+    <span>AI / AGENTIC SYSTEMS</span>
+    <span>DIFFICULTY: HARD</span>
+    <span>PREP BRIEF v1</span>
+  </div>
+  <h1>Supply Chain Disruption<br>Control Agent</h1>
+  <p class="sub">What the problem actually asks for, who would really use it, what already exists in India / US / China, what it would have to plug into, and how to build something that <em>reads</em> production-grade in twenty hours.</p>
+</header>
+
+<nav class="toc" aria-label="Contents">
+  <ol>
+    <li><a href="#s1"><span class="n">01</span> Read the statement properly</a></li>
+    <li><a href="#s2"><span class="n">02</span> Users &amp; personas</a></li>
+    <li><a href="#s3"><span class="n">03</span> A real day with this thing</a></li>
+    <li><a href="#s4"><span class="n">04</span> What exists: India</a></li>
+    <li><a href="#s5"><span class="n">05</span> What exists: US &amp; China</a></li>
+    <li><a href="#s6"><span class="n">06</span> Integration surface</a></li>
+    <li><a href="#s7"><span class="n">07</span> Build real vs. fake</a></li>
+    <li><a href="#s8"><span class="n">08</span> 20-hour plan &amp; demo</a></li>
+    <li><a href="#s9"><span class="n">09</span> Sources</a></li>
+  </ol>
+</nav>
+
+<!-- ============ 01 ============ -->
+<section id="s1">
+  <div class="shead"><span class="n">01</span><h2>Read the statement properly — your two docs disagree</h2></div>
+  <div class="col">
+  <p>You uploaded two files and they are <strong>not the same problem</strong>. Getting this wrong is the single cheapest way to lose this hackathon, so start here.</p>
+  </div>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>&nbsp;</th><th><code>Assigned_Team_Problem.txt</code> — the official one</th><th><code>problemstatement.md</code> — the long one</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">Centre of gravity</td><td>Logistics: port closures, weather, carrier delays, <strong>multi-modal re-routing</strong> (Air/Sea/Rail/Road)</td><td>Procurement: PO delays, inventory cover, <strong>RFQs and alternate suppliers</strong></td></tr>
+      <tr><td class="mono">Trigger source</td><td>External disruption <em>feeds</em> ingested in real time</td><td>Supplier emails + ERP state</td></tr>
+      <tr><td class="mono">Approval threshold</td><td class="num">&gt; $50,000 impact</td><td class="num">&gt; 150,000 (currency unstated, reads INR)</td></tr>
+      <tr><td class="mono">Severity model</td><td>Explicit: Low / Medium / High / Critical</td><td>Implicit, priority-based</td></tr>
+      <tr><td class="mono">Scoring</td><td>Decisions &amp; constraints 40 · Architecture 30 · Simulation/edge 20 · Audit &amp; UX 10</td><td>Continuity 35 · Cost 20 · Supplier risk 15 · Tool efficiency 10 · Recovery 10 · Audit 10</td></tr>
+      <tr><td class="mono">Interface</td><td>REST API <em>or</em> CLI — a GUI is not required</td><td>"Final dashboard or report"</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout hot">
+    <h4>The call</h4>
+    <p><strong>Build to the <code>.txt</code>.</strong> It is titled "Assigned Team Problem" and carries the official watermark and the rubric you'll actually be scored on. Treat the <code>.md</code> as a <em>depth spec</em> — a free list of the hidden tests, edge cases and audit-trail fields the judges are likely to probe. Best move: make re-routing the spine, and keep procurement/RFQ as a second remediation family the same agent can choose. Then you satisfy both readings and look broader than everyone who only did one.</p>
+  </div>
+
+  <h3>What kind of statement is this?</h3>
+  <p>It's a <strong>vertical agentic-operations</strong> problem, in a sealed simulator. Three properties define it:</p>
+  <ul>
+    <li><strong>Closed-loop, not question-answer.</strong> The agent observes state, acts on state, and the state changes underneath it. A chatbot over a database scores near zero here.</li>
+    <li><strong>Adversarial and incomplete information.</strong> Suppliers lie or hedge, ERP stock is stale, tracking contradicts claims. The <code>.md</code> literally lists ten hidden tests built on this.</li>
+    <li><strong>Bounded autonomy.</strong> There's a line ($50k) the agent may not cross alone. Half the score is really "did it act decisively below the line and stop cleanly above it".</li>
+  </ul>
+
+  <h3>The five things judges will actually check</h3>
+  <div class="grid g3">
+    <div class="card"><span class="chip a">Test 01</span><h5>Did it replan?</h5><p class="note">Inject a contradiction mid-run. If the plan is a fixed pipeline, it breaks visibly.</p></div>
+    <div class="card"><span class="chip a">Test 02</span><h5>Did it skip tools?</h5><p class="note">Calling all eleven tools every time reads as no reasoning at all. Tool efficiency is an explicit line item.</p></div>
+    <div class="card"><span class="chip a">Test 03</span><h5>Did it hold the line?</h5><p class="note">A $52k remediation must <em>halt</em> — not execute and then notify.</p></div>
+    <div class="card"><span class="chip a">Test 04</span><h5>Did it verify?</h5><p class="note">Supplier says "dispatched", tracking says "label created". Trust either one blindly and supplier-risk is gone.</p></div>
+    <div class="card"><span class="chip a">Test 05</span><h5>Can an ops manager read the log?</h5><p class="note">Not a token trace. Sentences a Head of Procurement could paste straight into an email.</p></div>
+  </div>
+</section>
+
+<!-- ============ 02 ============ -->
+<section id="s2">
+  <div class="shead"><span class="n">02</span><h2>Who actually uses this</h2></div>
+  <div class="col">
+  <p>The trap is designing for one generic "supply chain user". There are <strong>four distinct humans</strong> around this agent, and they want opposite things. Your UI should show that you know that — it's the cheapest way to look like a product team rather than a hackathon team.</p>
+  <p>Two of them are <em>users</em>, one is an <em>approver</em>, one never logs in at all and only ever reads the output. There's also a fifth actor who is not a user but shapes every message the agent sends: the supplier.</p>
+  </div>
+
+  <div class="grid g2">
+    <div class="card">
+      <span class="chip a">Primary user · daily</span>
+      <h5>The Buyer / Materials Planner</h5>
+      <p class="role">"Ravi", 26–38 · plant or shared-services · SAP + Excel + Outlook</p>
+      <dl>
+        <dt>His day</dt><dd>60–150 open POs. Chases 15–25 suppliers a week by email and WhatsApp for revised dates. Rebuilds the same shortage sheet every morning.</dd>
+        <dt>What he wants</dt><dd><strong>"Tell me what's going to break before it breaks"</strong> — and draft the follow-up email so he only has to press send.</dd>
+        <dt>What makes him distrust it</dt><dd>The agent emailing his supplier something wrong in his name. Relationship damage is career damage.</dd>
+        <dt>Design implication</dt><dd>Outbound messages are <em>drafted and queued</em> with a visible hold window, not fired instantly. Show him the draft.</dd>
+      </dl>
+    </div>
+
+    <div class="card">
+      <span class="chip a">Primary user · daily</span>
+      <h5>The Logistics / Transport Coordinator</h5>
+      <p class="role">"Meera", 25–40 · the <code>.txt</code>'s "human coordinator"</p>
+      <dl>
+        <dt>Her day</dt><dd>Watches lanes, carriers, ports. When Nhava Sheva or Shanghai backs up she starts rebooking by hand across freight forwarders.</dd>
+        <dt>What she wants</dt><dd>Ranked re-route options with landed cost, ETA and SLA impact side by side — the comparison she currently builds in a spreadsheet at 1am.</dd>
+        <dt>What makes her distrust it</dt><dd>Options that ignore reality: hazmat on passenger air, a port with no rail siding, a carrier she's blacklisted.</dd>
+        <dt>Design implication</dt><dd>Constraints must be visible as <em>rejected</em> options with reasons, not silently filtered out.</dd>
+      </dl>
+    </div>
+
+    <div class="card">
+      <span class="chip w">Approver · minutes per week</span>
+      <h5>The Plant / Supply Chain Manager</h5>
+      <p class="role">"Priya", 35–50 · owns the line stopping</p>
+      <dl>
+        <dt>Her involvement</dt><dd>Only ever sees the agent at the escalation gate. Often on a phone, often in a meeting.</dd>
+        <dt>What she wants</dt><dd>One screen: cost, downtime avoided, the two alternatives that were rejected and why, and the cost of doing nothing. Decide in under 60 seconds.</dd>
+        <dt>What makes her distrust it</dt><dd>A vague alert. "PO-7712 at risk" is worthless; she needs the recommendation and the number.</dd>
+        <dt>Design implication</dt><dd>The escalation is a <strong>decision brief artifact</strong> — a real document with an Approve / Reject / Modify action, not a toast notification.</dd>
+      </dl>
+    </div>
+
+    <div class="card">
+      <span class="chip n">Reader · never logs in</span>
+      <h5>The Finance Controller / Auditor</h5>
+      <p class="role">"Anil", 40–55 · reads the log, not the app</p>
+      <dl>
+        <dt>His involvement</dt><dd>Shows up a month later asking why the company paid 12% over baseline on an emergency freight booking.</dd>
+        <dt>What he wants</dt><dd>An immutable, exportable trail: what was known, when, what else was considered, who approved.</dd>
+        <dt>What makes him distrust it</dt><dd>A log he can't reconstruct — timestamps missing, rationale generated after the fact.</dd>
+        <dt>Design implication</dt><dd>Append-only event log with per-step hashes and a CSV/PDF export. This is 10% of the rubric sitting in plain sight.</dd>
+      </dl>
+    </div>
+  </div>
+
+  <div class="callout brass">
+    <h4>The fifth actor — the supplier</h4>
+    <p>Not a user, but every outbound message hits a human at a vendor who may be vague, over-optimistic, or actively misleading. That's why the <code>.md</code> tells you to <em>challenge contradictory replies</em>. In your simulator, give each supplier a hidden behavioural trait — <span class="chip g">reliable</span> <span class="chip w">optimistic</span> <span class="chip c">evasive</span> — and let the agent discover it. That single design choice generates most of your "supplier risk" score.</p>
+  </div>
+
+  <h3>Who buys it, if this were real</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>Segment</th><th>Why they feel this pain</th><th>Who signs</th></tr></thead>
+      <tbody>
+        <tr><td>Auto &amp; auto-component (Pune, Chennai, Pithampur)</td><td>JIT lines; a ₹40 part stops a ₹4L/hour assembly line</td><td>Plant Head / VP SCM</td></tr>
+        <tr><td>Electronics &amp; EMS</td><td>Long-lead semis, allocation shortages, 20+ week lead times</td><td>Head of Procurement</td></tr>
+        <tr><td>Pharma &amp; specialty chem</td><td>Cold chain, certification constraints, regulated substitution</td><td>Supply Chain Director + QA</td></tr>
+        <tr><td>D2C / retail distribution</td><td>Stockouts are immediate revenue loss; high SKU count</td><td>COO / Ops Head</td></tr>
+        <tr><td>3PL &amp; freight forwarders</td><td>SLA penalties on missed delivery windows</td><td>Logistics Operations Head</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="col">The pitch line that works on all of them: <strong>the cost of the delay is almost always larger than the cost of the part.</strong> Widely cited industry figures put unplanned manufacturing downtime in the hundreds of thousands of dollars per hour for large plants — treat the specific number as directional, but the asymmetry is the real argument.</p>
+</section>
+
+<!-- ============ 03 ============ -->
+<section id="s3">
+  <div class="shead"><span class="n">03</span><h2>What it looks like in actual use</h2></div>
+  <div class="col">
+  <p>This is the narrative to put on your demo slide, because it makes the autonomy obvious. Times are simulated.</p>
+  </div>
+
+  <ol class="tl">
+    <li><span class="t">02:41 · ingest</span><span class="d">Feed event: congestion at a transshipment port; carrier advisory adds 6–9 days to two lanes. Nobody is awake.</span></li>
+    <li><span class="t">02:41 · triage</span><span class="d">Agent joins the advisory to open shipments. 3 POs affected. Scores severity from <em>days of cover</em> × <em>order priority</em> × <em>substitutability</em> → one <span class="chip c">Critical</span>, two <span class="chip w">Medium</span>.</span></li>
+    <li><span class="t">02:43 · verify</span><span class="d">Pulls inventory. ERP says 800 usable; warehouse feed says 390. Agent takes the <strong>lower</strong> figure, flags the discrepancy, and raises severity. It does not average them.</span></li>
+    <li><span class="t">02:44 · reason</span><span class="d">390 units ÷ 90/day = 4.3 days of cover. PROD-882 (high priority) needs 700 units in 5 days. Gap is real, not hypothetical.</span></li>
+    <li><span class="t">02:46 · challenge</span><span class="d">Supplier claims "dispatched". Tracking says <code>label_created_no_pickup</code>, last movement null. Agent marks the claim unverified, drops that supplier's reliability weight, and stops treating the inbound shipment as available supply.</span></li>
+    <li><span class="t">02:52 · source</span><span class="d">Two parallel remediation families evaluated: <em>re-route</em> (air freight the in-transit stock) and <em>re-source</em> (RFQ three alternates). Cheapest alternate fails the certification constraint and is rejected <strong>with the reason recorded</strong>.</span></li>
+    <li><span class="t">03:04 · optimise</span><span class="d">Best plan is a split: 600 units air-freighted from one supplier at 4 days, 300 by road from another at 6 days, and PROD-914 (low priority) slips 2 days to protect safety stock.</span></li>
+    <li><span class="t">03:05 · gate</span><span class="d">Total impact $68k. Over the $50k line. Agent <strong>does not execute</strong>. It writes a decision brief and escalates.</span></li>
+    <li><span class="t">08:30 · human</span><span class="d">Priya opens one screen on her phone: recommendation, cost, downtime avoided, two rejected alternatives with reasons, cost of inaction. Approves in 40 seconds.</span></li>
+    <li><span class="t">08:31 · execute</span><span class="d">Agent books, updates the simulated ERP, attaches the correspondence, sets a re-check timer on the moderate-reliability supplier, and closes the incident with a signed audit trail.</span></li>
+  </ol>
+
+  <div class="callout">
+    <h4>The value in one sentence</h4>
+    <p>Six hours of overnight work compressed into twenty minutes of machine time, and a human spent forty seconds on the only part that needed judgment. That's the demo.</p>
+  </div>
+</section>
+
+<!-- ============ 04 ============ -->
+<section id="s4">
+  <div class="shead"><span class="n">04</span><h2>What exists today — India</h2></div>
+  <div class="col">
+  <p>India's stack is unusual: enterprise-grade ERP at the top, a huge unstructured middle running on Tally and WhatsApp, and — uniquely — a set of <strong>government data rails</strong> that don't exist anywhere else. That last part is your differentiation story if you want one.</p>
+  </div>
+
+  <h3>The four layers</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>Layer</th><th>Who's there</th><th>What it does / doesn't do</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">Enterprise ERP</td><td>SAP S/4HANA, Oracle Fusion, Microsoft D365, Infor</td><td>Systems of record. Store the PO, show the alert. <strong>Do not decide.</strong></td></tr>
+        <tr><td class="mono">Mid-market / MSME</td><td>Tally, Zoho Inventory/Books, Busy, Marg, Ramco, SAP Business One</td><td>Where most Indian manufacturing actually lives. Disruption handling here is literally a phone call.</td></tr>
+        <tr><td class="mono">Logistics &amp; visibility SaaS</td><td>Locus, FarEye, GoComet, Fleetx, LocoNav, Delhivery's platform, Increff (inventory)</td><td>Strong on tracking, routing and last mile. Weaker on autonomous procurement decisions.</td></tr>
+        <tr><td class="mono">SI-built control towers</td><td>TCS, Infosys, Wipro, LTIMindtree, Accenture India</td><td>Bespoke towers on top of SAP/Oracle. TCS markets a retail supply-chain control tower approach and the Optumera platform, now positioned as agentic AI for merchandising and supply decisions.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>The government rails — the part nobody else in the room will mention</h3>
+  <ul>
+    <li><strong>ULIP</strong> (Unified Logistics Interface Platform) — the national logistics data exchange under the National Logistics Policy. It aggregates APIs across ~30+ government systems (rail, road, ports, customs, e-way bill) behind one gateway, and has been reported crossing <strong>100 crore (1 billion) API transactions</strong>. It's the closest thing to a "UPI moment" for logistics data.</li>
+    <li><strong>E-Way Bill API</strong> (NIC/GSTN) — every goods movement above threshold already generates a machine-readable record with vehicle number, distance and validity. There is a public developer portal and a GSP licensing route.</li>
+    <li><strong>e-Invoice / IRP</strong> — invoice-level data with IRN, sandbox available at NIC.</li>
+    <li><strong>ICEGATE</strong> — customs filing and container status for import legs.</li>
+    <li><strong>FASTag / VAHAN</strong> — toll-plaza crossings give near-real-time truck position without any carrier integration at all.</li>
+  </ul>
+
+  <div class="callout brass">
+    <h4>Free differentiation for your pitch</h4>
+    <p>Every US-built control tower has to buy or beg carrier telemetry. In India, e-way bill + FASTag + ULIP means a <em>road shipment is already observable</em> through government rails. An India-first disruption agent can get real-time ground truth that project44 or FourKites would have to negotiate for. Say that out loud in your pitch even though you're mocking it in the demo — it's a genuine structural insight, not a hack.</p>
+  </div>
+</section>
+
+<!-- ============ 05 ============ -->
+<section id="s5">
+  <div class="shead"><span class="n">05</span><h2>What exists today — US &amp; China</h2></div>
+
+  <h3>United States — the market is segmented, and nobody owns the whole loop</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>Category</th><th>Players</th><th>What they solve</th><th class="mono">Indicative cost</th></tr></thead>
+      <tbody>
+        <tr><td>Planning / S&amp;OP</td><td>Blue Yonder, Kinaxis, o9 Solutions, Anaplan</td><td>Forecast, network optimisation, scenario &amp; concurrent planning</td><td class="num">$300k – $1M+</td></tr>
+        <tr><td>Real-time visibility</td><td>project44, FourKites, Shippeo, Roambee</td><td>Multi-modal tracking, predictive ETA, exception alerts</td><td class="num">from ~$10k/yr</td></tr>
+        <tr><td>Multi-enterprise network</td><td>E2open, Infor Nexus, SAP Business Network</td><td>Multi-tier supplier visibility, trade &amp; logistics execution</td><td class="num">$200k+</td></tr>
+        <tr><td>Procurement / source-to-pay</td><td>Coupa, SAP Ariba, Zip, Ivalua, Jaggaer</td><td>Sourcing events, PO issuance, supplier onboarding, approvals</td><td class="num">enterprise</td></tr>
+        <tr><td>Supply risk intelligence</td><td>Everstream, Interos, Resilinc, Sourcemap</td><td>Sub-tier mapping, event feeds, geopolitical/climate risk scoring</td><td class="num">enterprise</td></tr>
+        <tr><td><strong>PO expediting — your MVP wedge, taken</strong></td><td>SourceDay, Leverage</td><td>Automated supplier follow-up on open POs, ship-date confirmation, ERP write-back (NetSuite, Epicor, etc.)</td><td class="num">mid-market SaaS</td></tr>
+        <tr><td>AI-native sourcing</td><td>Arkestro, Keelvar, Pactum, Levelpath, Tacto</td><td>Predictive/autonomous negotiation and sourcing events</td><td class="num">varies</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="col" style="font-size:15px;color:var(--ink-2)">Cost figures are indicative, drawn from a 2026 vendor-published roundup — treat them as order-of-magnitude, not quotes.</p>
+
+  <div class="callout hot">
+    <h4>Know this before a judge says it</h4>
+    <p>The <code>.md</code> proposes "a PO expediting and supplier follow-up agent" as the startup wedge. <strong>That company already exists</strong> — SourceDay does exactly this, integrated into NetSuite, Epicor and other mid-market ERPs, and Leverage sells AI supplier follow-up without a portal. Don't claim the wedge is empty. Claim the <em>autonomy line</em> instead: existing tools chase, notify and surface. None of them <em>decide and act under a spend gate with a defensible trail</em>. That's a defensible sentence; "nobody does PO follow-up" is not.</p>
+  </div>
+
+  <h4>The incumbents are moving — fast</h4>
+  <ul>
+    <li>SAP has been shipping <strong>Joule agents</strong> into ERP through 2026, including a Production Planning &amp; Operations Agent that validates material availability and work-centre capacity and can release standard production orders autonomously, plus a Supplier Onboarding Agent and a Bid Analysis Agent for structured bid comparison. <em>(Reported via SAP partner channels — verify before quoting in a pitch.)</em></li>
+    <li>Blue Yonder and the retail platform vendors are pushing agentic AI into merchandising and fulfilment.</li>
+    <li>Implication for you: <strong>do not pitch "AI in supply chain" as novel.</strong> Pitch the specific thing — bounded autonomy with an auditable decision trail across re-routing <em>and</em> re-sourcing.</li>
+  </ul>
+
+  <h3>China — vertically integrated, and increasingly domestic</h3>
+  <ul>
+    <li><strong>Cainiao</strong> (Alibaba) — a logistics <em>network</em> plus a data platform: smart routing, warehouse automation, cross-border. The disruption loop is internal to the network rather than sold as software.</li>
+    <li><strong>JD Logistics</strong> — same shape: own warehouses, own fleet, own forecasting. Control-tower functions are embedded in operations.</li>
+    <li><strong>Yonyou and Kingdee</strong> — the domestic ERP majors. On older market-share work (Jefferies, 2020) SAP and Oracle together held roughly 40% of China ERP revenue against Yonyou ~19% and Kingdee ~9%; state policy favouring domestic software has been pushing that mix toward the local vendors since. <em>Numbers are dated — directional only.</em></li>
+    <li><strong>SF Express</strong> and the express majors run their own dispatch and re-routing engines.</li>
+  </ul>
+  <p class="col"><strong>The structural contrast worth naming in your pitch:</strong> the US buys disruption control as software layered over fragmented carriers; China owns the physical network and embeds it; India has fragmented physical networks <em>plus</em> unusually good public data rails. Three different answers to the same problem — and it explains why an India-first product is a different product, not a cheaper copy.</p>
+</section>
+
+<!-- ============ 06 ============ -->
+<section id="s6">
+  <div class="shead"><span class="n">06</span><h2>The integration surface — what a real one plugs into</h2></div>
+  <div class="col">
+  <p>You asked what things like TCS's software and Oracle integrations actually look like. Here's the honest map. <strong>You will implement none of these.</strong> You will implement the <em>interfaces</em> and one mock behind each — see §07. But knowing the real names and endpoints is what makes an architecture slide land.</p>
+  </div>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>System</th><th>What the agent needs from it</th><th>The real integration</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>SAP S/4HANA</strong></td><td>POs, inventory, production orders, goods receipts</td>
+          <td class="mono">OData services via SAP API Business Hub — e.g. <code>API_PURCHASEORDER_PROCESS_SRV</code> (OData V2/V4 Purchase Order), plus material stock and production order APIs. BAPIs / IDocs on older on-prem landscapes.</td>
+        </tr>
+        <tr>
+          <td><strong>Oracle Fusion Cloud SCM / Procurement</strong></td><td>POs, receiving, sales orders, supplier records</td>
+          <td class="mono">REST at <code>/fscmRestApi/resources/{version}/purchaseOrders</code>, <code>purchaseOrdersForReceiving</code>, sales-order endpoints; Oracle publishes SCM integration playbooks.</td>
+        </tr>
+        <tr>
+          <td><strong>SAP Ariba / SAP Business Network</strong></td><td>RFQ issuance, supplier quotes, PO/confirmation exchange</td>
+          <td class="mono">Ariba APIs on SAP API Hub; cXML document exchange; RFQ/Quote message configurations between ERP and network.</td>
+        </tr>
+        <tr>
+          <td><strong>Coupa</strong></td><td>Requisitions, POs, approval chains, supplier records</td>
+          <td class="mono">Coupa Core REST API + approval-chain objects.</td>
+        </tr>
+        <tr>
+          <td><strong>EDI (the actual backbone)</strong></td><td>The machine layer trading partners really use</td>
+          <td class="mono">X12: <b>850</b> PO · <b>855</b> PO ack · <b>860</b> PO change · <b>856</b> ASN · <b>810</b> invoice · <b>997</b> functional ack. EDIFACT: <b>ORDERS</b> · <b>ORDRSP</b> · <b>DESADV</b> · <b>IFTMIN</b>. Moved over AS2/SFTP/VAN.</td>
+        </tr>
+        <tr>
+          <td><strong>Visibility platforms</strong></td><td>Shipment position, predicted ETA, exception events</td>
+          <td class="mono">project44 / FourKites / Shippeo REST + webhooks; GS1 EPCIS for event semantics.</td>
+        </tr>
+        <tr>
+          <td><strong>Carriers &amp; forwarders</strong></td><td>Rates, capacity, booking</td>
+          <td class="mono">Per-carrier REST/EDI; ocean via INTTRA-style bookings; air via cargo portals; rate tables often still spreadsheets.</td>
+        </tr>
+        <tr>
+          <td><strong>India govt rails</strong></td><td>Ground truth on movement</td>
+          <td class="mono">ULIP gateway APIs · E-Way Bill API (NIC/GSTN, GSP-licensed) · e-Invoice IRP sandbox · ICEGATE · FASTag/VAHAN.</td>
+        </tr>
+        <tr>
+          <td><strong>TCS / Infosys-class SI platforms</strong></td><td>Where an Indian enterprise's tower already lives</td>
+          <td class="mono">TCS Optumera and TCS's control-tower offerings, Infosys Nia / Cortex-class stacks, integrated per-client on top of SAP/Oracle. In practice: an SI-mediated integration project, not a public API.</td>
+        </tr>
+        <tr>
+          <td><strong>Human channels</strong></td><td>Where supplier truth actually arrives</td>
+          <td class="mono">IMAP/Graph/Gmail API for mail; <strong>WhatsApp Business API</strong> — non-optional in India; supplier portals scraped or SFTP'd.</td>
+        </tr>
+        <tr>
+          <td><strong>Indian mid-market ERP</strong></td><td>The long tail</td>
+          <td class="mono">Tally (XML/ODBC), Zoho Inventory REST, Busy, Marg. Ugly, but this is where the customers are.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout">
+    <h4>The one slide that wins the architecture score</h4>
+    <p>Draw the agent core in the middle. Around it, a ring of <strong>named adapters</strong>: <code>SAPAdapter</code>, <code>OracleAdapter</code>, <code>AribaAdapter</code>, <code>EDIAdapter</code>, <code>ULIPAdapter</code>, <code>P44Adapter</code>, <code>MockAdapter</code>. Grey out every one except <code>MockAdapter</code> and label the greyed ones <em>"interface defined, not implemented"</em>. That is honest, it's exactly how real products ship, and it reads as roadmap rather than gap.</p>
+  </div>
+</section>
+
+<!-- ============ 07 ============ -->
+<section id="s7">
+  <div class="shead"><span class="n">07</span><h2>Production-grade surface, hackathon guts</h2></div>
+  <div class="col">
+  <p>This is the part you actually asked about. The principle: <strong>judges touch the surface and read the architecture; they never run load tests.</strong> So spend your hours where they touch, and mock everything behind it — but mock it behind a <em>real interface</em>, so it isn't a lie, it's an unimplemented backend.</p>
+  <p>The problem statement explicitly says to stay fully simulated (no real suppliers, ERPs or payment systems). Your mocks are <em>compliance</em>, not cheating. Say so on the slide.</p>
+  </div>
+
+  <div class="ledger">
+    <div>
+      <h4 style="color:var(--ok)">Build for real — this is where the score is</h4>
+      <ul>
+        <li><strong>The agent loop.</strong> plan → select tool → observe → re-evaluate → act. No <code>if scenario == 1</code> branches anywhere. This alone separates the top 5 teams.</li>
+        <li><strong>Deterministic constraint engine.</strong> Budget, MOQ, certification, hazmat, SLA windows, priority tiers — pure functions, unit-tested. <em>Never let the LLM do arithmetic.</em> It will get 390 × 118 wrong at the worst moment.</li>
+        <li><strong>Severity triage.</strong> A real scoring formula (cover days × priority × substitutability × value) that outputs Low/Med/High/Critical. LLM classifies free text; math stays in code.</li>
+        <li><strong>Approval gate.</strong> A hard state machine. Above threshold the execute tool <em>physically cannot</em> be called — it returns <code>APPROVAL_REQUIRED</code>. Demo that.</li>
+        <li><strong>Append-only audit log.</strong> Every step: <code>ts, incident_id, step, actor, tool, inputs, outputs, rationale, prev_hash</code>. Chain the hashes. It's ten lines of code and it looks like compliance software.</li>
+        <li><strong>Event-sourced replay.</strong> Same seed → same run. Lets you re-demo instantly when the wifi dies.</li>
+      </ul>
+    </div>
+    <div>
+      <h4 style="color:var(--brass)">Fake it — nobody will check</h4>
+      <ul>
+        <li><strong>The ERP.</strong> SQLite or JSON files. But expose it as <code>GET /erp/inventory</code>, <code>POST /erp/purchase-orders</code> so it behaves like a system of record.</li>
+        <li><strong>Suppliers.</strong> LLM personas with hidden traits in a YAML config: <code>honesty</code>, <code>response_delay_hrs</code>, <code>capacity_truthfulness</code>. Cheap, and it generates the adversarial behaviour the rubric rewards.</li>
+        <li><strong>Disruption feeds.</strong> A JSONL timeline replayed against a clock you can multiply 60×. "Real-time" is a clock, not an integration.</li>
+        <li><strong>Carrier rates &amp; transit times.</strong> A static CSV. Call it the <em>carrier rate table connector</em>. It is one.</li>
+        <li><strong>Auth &amp; RBAC.</strong> Two hardcoded users (operator, approver). Render the role badge, enforce one rule (only approver can approve). Done.</li>
+        <li><strong>Every external integration.</strong> Interface defined, <code>NotImplementedError</code> behind it, except the mock. See the adapter ring in §06.</li>
+        <li><strong>Scale.</strong> 20 components, 10 suppliers, 6 lanes. Enough for every edge case, small enough to reason about on stage.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Eight cheap details that read as "production"</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th class="mono">#</th><th>Detail</th><th>Cost</th><th>Why it lands</th></tr></thead>
+      <tbody>
+        <tr><td class="num">1</td><td>Idempotency key on every write tool</td><td class="num">~20 min</td><td>Nobody at a hackathon does this. It signals someone has shipped software before.</td></tr>
+        <tr><td class="num">2</td><td>Tool-call budget meter in the UI (<code>17 / 40 calls</code>)</td><td class="num">~20 min</td><td>Directly targets the "tool efficiency" criterion and makes reasoning visible.</td></tr>
+        <tr><td class="num">3</td><td><code>--dry-run</code> mode that plans without executing</td><td class="num">~30 min</td><td>Every ops tool has one. Judges recognise the shape.</td></tr>
+        <tr><td class="num">4</td><td>Structured JSON logs + an <code>incident_id</code> trace on every line</td><td class="num">~20 min</td><td>Makes the audit trail a byproduct instead of a feature you had to build.</td></tr>
+        <tr><td class="num">5</td><td>OpenAPI docs at <code>/docs</code></td><td class="num">free</td><td>FastAPI gives it away. Instantly reads as an API product, and the <code>.txt</code> asks for REST or CLI.</td></tr>
+        <tr><td class="num">6</td><td><code>/healthz</code> + config via env vars, no hardcoded keys</td><td class="num">~10 min</td><td>Cheapest possible "we thought about deployment".</td></tr>
+        <tr><td class="num">7</td><td>Deterministic seed → reproducible scenario runs</td><td class="num">~30 min</td><td>Lets a judge re-run your worst case and get the same answer. Enormous trust signal.</td></tr>
+        <tr><td class="num">8</td><td>Escalation brief exported as a real document</td><td class="num">~40 min</td><td>Turns the 10% audit/UX slice into something they can hold.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Shape of the system</h3>
+<pre class="arch">
+   disruption feed (jsonl + clock)        supplier personas (llm + hidden traits)
+              │                                        ▲
+              ▼                                        │
+      ┌───────────────┐                                │
+      │  <b>INGEST</b>       │ normalise → event bus         │
+      └───────┬───────┘                                │
+              ▼
+      ┌───────────────┐   severity = f(cover_days, priority,
+      │  <b>TRIAGE</b>       │              substitutability, value)
+      └───────┬───────┘   → Low / Med / High / Critical
+              ▼
+      ┌─────────────────────────────────────────────┐
+      │  <b>AGENT CORE</b>   plan · act · observe · replan │◄─── tool budget meter
+      │                 state + memory per incident  │
+      └───────┬─────────────────────────────────────┘
+              │  tool calls (deliberate, not exhaustive)
+              ▼
+   ┌──────────────────────────────────────────────────────┐
+   │ <b>TOOLS</b>  inventory · production · po · tracking        │
+   │        rfq · supplier_msg · route_options · rates    │
+   │        constraint_check · approval_check · erp_write │
+   └───────┬──────────────────────────────────────────────┘
+           ▼
+   ┌───────────────┐  deterministic · unit-tested · no LLM math
+   │ <b>CONSTRAINTS</b>   │  budget · MOQ · cert · hazmat · SLA · tier
+   └───────┬───────┘
+           ▼
+   ┌───────────────┐   impact &gt; $50k ──► <b>HALT</b> ──► decision brief ──► human
+   │ <b>DECISION GATE</b> │   impact ≤ $50k ──► execute
+   └───────┬───────┘
+           ▼
+   ┌───────────────┐   append-only · hash-chained · replayable · exportable
+   │ <b>AUDIT LEDGER</b>  │
+   └───────────────┘
+</pre>
+  <p class="col"><strong>Stack:</strong> Python + FastAPI + SQLite + one LLM with native tool calling, and a thin React or HTMX console. Node works equally well — pick whichever your team is fastest in, because the differentiator here is the agent design, not the runtime.</p>
+</section>
+
+<!-- ============ 08 ============ -->
+<section id="s8">
+  <div class="shead"><span class="n">08</span><h2>Twenty hours, and the seven minutes that matter</h2></div>
+
+  <h3>Build order — deliberately front-loads the scoring weight</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th class="mono">Hrs</th><th>Block</th><th>Done when</th></tr></thead>
+      <tbody>
+        <tr><td class="num">0–3</td><td>Simulator + data model + REST surface</td><td>All <code>/erp/*</code>, <code>/tracking/*</code>, <code>/routes/*</code> endpoints return real data. Seeded and replayable.</td></tr>
+        <tr><td class="num">3–6</td><td>Tools + deterministic constraint engine</td><td>Every tool callable standalone; constraint functions unit-tested with the nasty cases.</td></tr>
+        <tr><td class="num">6–10</td><td>Agent loop + state + replanning</td><td>Runs one disruption end to end without any scenario-specific branching.</td></tr>
+        <tr><td class="num">10–13</td><td>Triage scoring, approval gate, escalation brief</td><td>A $52k plan halts and produces a document. A $48k plan executes.</td></tr>
+        <tr><td class="num">13–16</td><td>Audit ledger + console UI</td><td>Live incident view, tool budget meter, hash-chained trail, export button.</td></tr>
+        <tr><td class="num">16–18</td><td>Adversarial scenarios</td><td>Lying supplier, stale inventory, demand spike, expedite withdrawn, priority flip — each survives.</td></tr>
+        <tr><td class="num">18–20</td><td>Demo rehearsal + architecture slide + README</td><td>Seven-minute run, twice, timed. Recorded as backup.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout hot">
+    <h4>Rule for hour 16 onward</h4>
+    <p>Freeze features. Everything after hour 16 is scenarios, rehearsal and the trail. A team with three flawless adversarial scenarios beats a team with nine features and a crash on stage — and the rubric's 20% "edge case resilience" slice is literally paying you to do this.</p>
+  </div>
+
+  <h3>The seven-minute demo</h3>
+  <ol>
+    <li><strong>0:00–0:40 — the stake.</strong> One line: a delayed part stops a line that costs lakhs per hour, and today a human finds out in the morning. Don't explain supply chains.</li>
+    <li><strong>0:40–1:20 — the architecture slide.</strong> Agent core, adapter ring, decision gate, audit ledger. Ten seconds on "interface defined, backend mocked — the statement requires full simulation."</li>
+    <li><strong>1:20–4:00 — the live run.</strong> Inject the disruption on stage. Narrate the <em>decisions</em>, not the code. Pause on the moment it rejects the cheapest supplier and say why.</li>
+    <li><strong>4:00–4:40 — the ambush.</strong> Inject a contradiction mid-run yourself, out loud: "the supplier just changed their story." Let the judges watch it replan. <em>This is the money shot.</em> Volunteering your own edge case is far stronger than surviving theirs.</li>
+    <li><strong>4:40–5:30 — the gate.</strong> Show it refusing to spend over the line, and the decision brief it writes instead. Approve on a phone.</li>
+    <li><strong>5:30–6:20 — the trail.</strong> Scroll the audit ledger. Point out the rejected options and their reasons. "An ops manager can read this. So can an auditor, next quarter."</li>
+    <li><strong>6:20–7:00 — the wedge.</strong> Name the incumbents honestly, then the one sentence: existing tools <em>surface</em> disruptions; this one <em>resolves</em> them under a spend gate with a defensible trail. Land on the India rails point.</li>
+  </ol>
+
+  <h3>Rubric checklist — tape this to the monitor</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th class="mono">Weight</th><th>Criterion</th><th>The artefact that proves it</th></tr></thead>
+      <tbody>
+        <tr><td class="num">40%</td><td>Decision accuracy &amp; constraint compliance</td><td>Unit-tested constraint engine + a scenario where the <em>obvious</em> cheap answer is correctly rejected</td></tr>
+        <tr><td class="num">30%</td><td>Architecture, tool design, robustness</td><td>Adapter ring, tool budget meter, no scenario branching, <code>/docs</code></td></tr>
+        <tr><td class="num">20%</td><td>Real-time simulation &amp; edge cases</td><td>Five adversarial scenarios, seeded and replayable, one injected live</td></tr>
+        <tr><td class="num">10%</td><td>Audit, transparency, UX/CLI</td><td>Hash-chained ledger, exportable escalation brief, rejected-options-with-reasons</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout">
+    <h4>Three ways teams lose this one</h4>
+    <ul>
+      <li><strong>The demo is a dashboard.</strong> If the screen mostly shows charts, judges read "dashboard" and the statement explicitly rules that out. Lead with decisions and the trail.</li>
+      <li><strong>The agent calls every tool every time.</strong> Looks thorough, scores as no reasoning. Log skipped tools with the reason for skipping — it turns restraint into visible evidence.</li>
+      <li><strong>The LLM does the maths.</strong> One wrong multiplication on stage and the 40% slice is gone. Arithmetic in code, judgment in the model.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============ 09 ============ -->
+<section id="s9">
+  <div class="shead"><span class="n">09</span><h2>Sources &amp; confidence notes</h2></div>
+  <div class="col">
+  <p style="font-size:15px;color:var(--ink-2)">Vendor pricing, market-share and product-launch claims below come from vendor blogs, partner channels and analyst summaries of varying independence. Directionally useful for a pitch; verify anything you plan to state as fact on stage. The China ERP share figures date to 2020 work and are almost certainly stale.</p>
+  </div>
+  <ul class="srcs">
+    <li><a href="https://locus.sh/blogs/best-supply-chain-control-tower-providers/">Locus — Best Supply Chain Control Tower Providers (2026)</a></li>
+    <li><a href="https://fareye.com/resources/blogs/supply-chain-control-tower-providers">FarEye — Control Tower Providers</a></li>
+    <li><a href="https://ddnews.gov.in/en/ulip-crosses-100-crore-api-transactions-boosting-indias-logistics-efficiency/">DD News — ULIP crosses 100 crore API transactions</a></li>
+    <li><a href="https://www.iitm.ac.in/happenings/events/unified-logistics-interface-platform-ulip-game-changer-and-upi-moment-logistics">IIT Madras — ULIP as logistics' UPI moment</a></li>
+    <li><a href="https://docs.ewaybillgst.gov.in/apidocs/">GSTN — E-Way Bill API developer portal</a></li>
+    <li><a href="https://einv-apisandbox.nic.in/">NIC — e-Invoice API sandbox</a></li>
+    <li><a href="https://help.sap.com/docs/SAP_S4HANA_CLOUD/bb9f1469daf04bd894ab2167f8132a1a/c89eec80ec2043d980cb7b8c89e0a00a.html">SAP Help — Purchase Order (OData V4)</a></li>
+    <li><a href="https://community.sap.com/t5/spend-management-blog-posts-by-sap/purchase-order-via-api-purchaseorder-process-srv-example-api-call/ba-p/13700856">SAP Community — API_PURCHASEORDER_PROCESS_SRV example</a></li>
+    <li><a href="https://docs.oracle.com/en/cloud/saas/procurement/25c/fapra/api-purchase-orders.html">Oracle — Fusion Procurement Purchase Orders REST</a></li>
+    <li><a href="https://docs.oracle.com/en/cloud/saas/supply-chain-and-manufacturing/25d/faips/scm-rest-services.html">Oracle — SCM integration playbooks</a></li>
+    <li><a href="https://help.sap.com/docs/r/product/ARIBA_APIS/latest/en-US">SAP Help — Ariba APIs</a></li>
+    <li><a href="https://learning.sap.com/courses/sap-ariba-integration-features-and-functions/analyzing-request-for-quotation-rfq-and-quote-message-configurations">SAP Learning — Ariba RFQ/Quote messages</a></li>
+    <li><a href="https://www.edi2xml.com/blog/the-most-used-edi-messages-in-the-supply-chain-management/">EDI2XML — Most used EDI messages in SCM</a></li>
+    <li><a href="https://www.partnerlinq.com/edi-guide/edi-850-and-edifact-orders-side-by-side-comparison">PartnerLinQ — EDI 850 vs EDIFACT ORDERS</a></li>
+    <li><a href="https://www.tcs.com/what-we-do/industries/retail/white-paper/retail-supply-chain-control-tower-approach">TCS — Control tower approach white paper</a></li>
+    <li><a href="https://www.tcs.com/what-we-do/products-platforms/tcs-optumera">TCS Optumera — agentic AI retail platform</a></li>
+    <li><a href="https://www.savictech.com/insights/sap-joule-agentic-platform-40-agents-2026/">SAVIC (SAP partner) — Joule agents, 2026</a></li>
+    <li><a href="https://sourceday.com/">SourceDay — PO collaboration &amp; supplier portal</a></li>
+    <li><a href="https://www.epicor.com/en-us/products/enterprise-resource-planning-erp/kinetic/supply-chain-management/sourceday/">Epicor — SourceDay AI-driven PO collaboration</a></li>
+    <li><a href="https://tryleverage.ai/blog/pf/how-to-automate-po-tracking-cut-expediting-hours">Leverage — automating PO tracking &amp; expediting</a></li>
+    <li><a href="https://www.gartner.com/reviews/market/real-time-transportation-visibility-platforms">Gartner Peer Insights — RTTV platforms</a></li>
+    <li><a href="https://www.am.miraeasset.eu/insight/china-next-frontier-erp-market/">Mirae Asset — China's ERP market (cites Jefferies 2020)</a></li>
+    <li><a href="https://www.cainiao.com/en/technology-digital-supply-chain.html">Cainiao — digital supply chain</a></li>
+    <li><a href="https://www.mordorintelligence.com/industry-reports/india-enterprise-resource-planning-market">Mordor — India ERP market</a></li>
+    <li><a href="https://procurementtactics.com/supply-chain-statistics/">Procurement Tactics — supply chain statistics 2026</a></li>
+  </ul>
+
+  <p class="foot">Prepared for team <strong>kala dhua</strong> · Hackers Occupied Pune 2026 · August 2026. Everything in §07–§08 is a recommendation, not a constraint — argue with it before you build on it.</p>
+</section>
+
+</div>
+
+</body>
+</html>
