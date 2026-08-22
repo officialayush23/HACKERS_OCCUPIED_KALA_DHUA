@@ -29,12 +29,29 @@ LLM_ENABLED = os.getenv("LLM_ENABLED", "true").lower() not in ("false", "0", "no
 
 _stats = {"calls": 0, "fallbacks": 0, "total_ms": 0.0, "last_error": None}
 
+# A wrong model name fails exactly like a wrong key, an expired key and a
+# firewall: the badge says "deterministic" and nothing says why. Model names
+# also move — one that existed when this was written may not exist on demo day,
+# and "the AI silently stopped being used" is the worst possible way to find
+# that out. So: try the configured name first, fall back through known-good
+# ones, and remember whichever answered.
+_MODEL_CANDIDATES = [
+    GEMINI_MODEL,
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-latest",
+    "gemini-1.5-pro",
+]
+_active_model: str | None = None
+
 
 def stats() -> dict[str, Any]:
     return {
         **_stats,
         "enabled": LLM_ENABLED and bool(GEMINI_API_KEY),
-        "model": GEMINI_MODEL,
+        "model": _active_model or GEMINI_MODEL,
+        "configured_model": GEMINI_MODEL,
+        "model_resolved": _active_model is not None,
         "avg_ms": round(_stats["total_ms"] / _stats["calls"], 1) if _stats["calls"] else 0,
     }
 
@@ -54,28 +71,45 @@ async def _call(prompt: str, *, system: str | None = None,
     if json_mode:
         body["generationConfig"]["responseMimeType"] = "application/json"
 
+    global _active_model
+    # Once one model has answered, stop shopping around.
+    candidates = ([_active_model] if _active_model
+                  else list(dict.fromkeys(m for m in _MODEL_CANDIDATES if m)))
+
     started = time.perf_counter()
+    last: str | None = None
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT_S) as client:
-            r = await client.post(
-                GEMINI_URL.format(model=GEMINI_MODEL),
-                headers={"x-goog-api-key": GEMINI_API_KEY,
-                         "Content-Type": "application/json"},
-                json=body,
-            )
-        elapsed = (time.perf_counter() - started) * 1000
+            for model in candidates:
+                r = await client.post(
+                    GEMINI_URL.format(model=model),
+                    headers={"x-goog-api-key": GEMINI_API_KEY,
+                             "Content-Type": "application/json"},
+                    json=body,
+                )
+                if r.status_code == 200:
+                    _active_model = model
+                    elapsed = (time.perf_counter() - started) * 1000
+                    _stats["calls"] += 1
+                    _stats["total_ms"] += elapsed
+                    _stats["last_error"] = None
+                    data = r.json()
+                    parts = (data.get("candidates", [{}])[0]
+                                 .get("content", {}).get("parts", []))
+                    text = "".join(p.get("text", "") for p in parts).strip()
+                    return text or None
+
+                last = f"{model} -> HTTP {r.status_code}: {r.text[:120]}"
+                # 404/400 means "not this model"; anything else (401, 429, 500)
+                # is about the key or the service and trying another name is
+                # just noise.
+                if r.status_code not in (400, 404):
+                    break
+
         _stats["calls"] += 1
-        _stats["total_ms"] += elapsed
-
-        if r.status_code != 200:
-            _stats["fallbacks"] += 1
-            _stats["last_error"] = f"HTTP {r.status_code}: {r.text[:160]}"
-            return None
-
-        data = r.json()
-        parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
-        text = "".join(p.get("text", "") for p in parts).strip()
-        return text or None
+        _stats["fallbacks"] += 1
+        _stats["last_error"] = last or "no model answered"
+        return None
     except Exception as exc:                      # noqa: BLE001 - never break the demo
         _stats["calls"] += 1
         _stats["fallbacks"] += 1
@@ -250,7 +284,16 @@ async def answer_question(question: str, state: dict) -> tuple[str, bool]:
 
 async def health() -> dict[str, Any]:
     """Used by /api/llm/health so the UI can show a live badge."""
-    if not (LLM_ENABLED and GEMINI_API_KEY):
-        return {"ok": False, "reason": "no key or disabled", **stats()}
+    if not LLM_ENABLED:
+        return {"ok": False, "reason": "LLM_ENABLED is false in the environment",
+                **stats()}
+    if not GEMINI_API_KEY:
+        return {"ok": False, "reason": "GEMINI_API_KEY is not set", **stats()}
     t = await _call("Reply with the single word: OK", max_tokens=10)
-    return {"ok": bool(t), "sample": t, **stats()}
+    if t:
+        return {"ok": True, "sample": t, **stats()}
+    # Say what actually went wrong. "deterministic" with no explanation is how a
+    # dead API key survives all the way to a demo.
+    return {"ok": False,
+            "reason": _stats["last_error"] or "the model returned nothing",
+            **stats()}

@@ -21,6 +21,8 @@ import Evaluation from '@/components/Evaluation'
 import HumanInput from '@/components/HumanInput'
 import AuditPage from '@/components/AuditPage'
 import NowBar from '@/components/NowBar'
+import BusyBar from '@/components/BusyBar'
+import PortalLauncher from '@/components/PortalLauncher'
 import ActionQueue from '@/components/ActionQueue'
 import AgentStatus from '@/components/AgentStatus'
 import CommandBar, { CommandBarTrigger } from '@/components/CommandBar'
@@ -35,7 +37,9 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { Button } from '@/components/ui/button'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
-import { TooltipProvider } from '@/components/ui/tooltip'
+import {
+  Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { GitBranch as SchematicIcon, Globe2 } from 'lucide-react'
 
 /** Geography is a second opinion, not the primary view — so it loads only when
@@ -297,12 +301,29 @@ export default function App() {
                       className="h-8 gap-1.5 px-2.5 text-[12px] font-normal">
                 <FlaskConical className="size-3.5" />Run simulation
               </Button>
+              <PortalLauncher />
               <CommandBarTrigger onClick={() => setCmdOpen(true)} />
               {llm && (
-                <Badge variant="outline" className={`gap-1.5 text-[10.5px] ${llm.ok
-                  ? 'border-primary/40 bg-primary/10 text-primary' : ''}`}>
-                  <Sparkles className="size-3" />{llm.ok ? llm.model : 'deterministic'}
-                </Badge>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge variant="outline"
+                           className={`cursor-default gap-1.5 text-[10.5px] ${llm.ok
+                             ? 'border-primary/40 bg-primary/10 text-primary'
+                             : 'border-warn/40 bg-warn/10 text-warn'}`}>
+                      <Sparkles className="size-3" />
+                      {llm.ok ? llm.model : 'deterministic only'}
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-sm text-[12px] leading-relaxed">
+                    {llm.ok
+                      ? `The model is reachable and is used for reading supplier prose and
+                         writing explanations. It never makes the decision — the solver does.`
+                      : `The model is not reachable, so the agent is running on its
+                         deterministic path only: constraints, scoring and refusals all
+                         still work, but supplier replies are parsed by regex alone and
+                         nothing is narrated. Reason: ${llm.reason ?? 'unknown'}`}
+                  </TooltipContent>
+                </Tooltip>
               )}
               {criticals > 0 && (
                 <motion.div animate={{ opacity: [1, 0.5, 1] }}
@@ -317,6 +338,7 @@ export default function App() {
           }
         />
 
+        <BusyBar />
         <NowBar onGoto={setPage} />
 
         <AnimatePresence mode="wait">

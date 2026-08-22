@@ -23,7 +23,8 @@ from .scenarios import (EVENT_SCHEMA, EVENT_TYPES, REF_TABLES, SCENARIOS,
                         unregister_custom, validate_custom)
 from .solver import solve_for_production_order
 from .scorer import score_run
-from . import agent, comms, intelligence, learning, llm, supplier_portal
+from . import (agent, comms, evaluation, intelligence, learning, llm,
+               supplier_portal, worldbuild)
 from .risk import assess as assess_risk
 
 SEED_PATH = pathlib.Path(__file__).resolve().parents[2] / "supabase" / "seed.sql"
@@ -410,13 +411,24 @@ async def score(run_id: int):
 
 @app.get("/api/incidents")
 async def incidents():
+    """Incidents belonging to the run the dashboard is scoped to.
+
+    Unscoped, this endpoint is how the header could read "No test run" while the
+    page underneath it rendered INC-1002 in full: `/api/now` obeyed the run
+    contract and this did not. An incident is evidence about a run; with no run
+    there is no evidence.
+    """
     pool = await db()
     async with pool.acquire() as conn:
+        run_id = await _active_run_id(conn)
+        if run_id is None:
+            return {"incidents": [], "scope": "no active run"}
         rows = await conn.fetch(
             """select i.*, c.name as component_name
                  from incidents i left join components c on c.id = i.component_id
-                order by i.opened_at desc limit 100""")
-    return {"incidents": [dict(r) for r in rows]}
+                where i.scenario_run_id = $1
+                order by i.opened_at desc limit 100""", run_id)
+    return {"incidents": [dict(r) for r in rows], "scope": run_id}
 
 
 async def _reset_floor(conn) -> int:
@@ -982,13 +994,64 @@ async def agent_ask(body: AskBody):
              "recent_rejections": [r["human_summary"] for r in rejects],
              "inventory": [dict(r) for r in inv]}
     answer, used_llm = await llm.answer_question(body.question, state)
+
+    # The numbers are built here, deterministically, and rendered as cards and
+    # tables — not asked of the model and not parsed back out of prose. Two
+    # reasons. A model that is unreachable still leaves you with the figures,
+    # which is the half of the answer that matters. And a table of numbers the
+    # model never touched cannot contain a number the model invented.
+    blocks: list[dict[str, Any]] = []
+
+    if inc:
+        blocks.append({
+            "kind": "facts",
+            "title": "Open right now",
+            "items": [{"label": r["id"], "value": r["component"] or "—",
+                       "sub": f'{r["severity"]} · {r["status"].replace("_", " ")}'}
+                      for r in inc],
+        })
+
+    if plans:
+        blocks.append({
+            "kind": "table",
+            "title": "Options on the table",
+            "columns": ["Option", "Cost", "Status"],
+            "align": ["left", "right", "left"],
+            "rows": [[p["label"],
+                      f'\u20b9{float(p["total_cost"] or 0):,.0f}',
+                      (p["status"] or "").replace("_", " ")] for p in plans],
+            "note": "Scored by the deterministic solver. The model wrote none of these.",
+        })
+
+    tight = sorted(
+        (dict(r) for r in inv if (r["daily_usage"] or 0) > 0),
+        key=lambda r: r["usable_stock"] / r["daily_usage"])[:6]
+    if tight:
+        blocks.append({
+            "kind": "table",
+            "title": "Tightest cover",
+            "columns": ["Component", "Usable", "ERP", "Days"],
+            "align": ["left", "right", "right", "right"],
+            "rows": [[r["display_name"], f'{r["usable_stock"]:,}', f'{r["erp_stock"]:,}',
+                      f'{r["usable_stock"] / r["daily_usage"]:.1f}'] for r in tight],
+            "note": "Where usable and ERP disagree, the agent uses usable — it is the "
+                    "one that has been counted.",
+        })
+
+    if rejects:
+        blocks.append({
+            "kind": "list",
+            "title": "What it refused, and why",
+            "items": [r["human_summary"] for r in rejects[:6]],
+        })
+
     # Say what the answer was formed from. An answer with no visible grounding is
     # indistinguishable from an answer that was made up.
     grounding = [f"{len(state['open_incidents'])} open incidents",
                  f"{len(state['recent_plans'])} recovery plans",
                  f"{len(state['recent_rejections'])} recorded refusals",
                  f"{len(state['inventory'])} components in stock"]
-    return {"answer": answer, "llm": used_llm, "grounding": grounding}
+    return {"answer": answer, "llm": used_llm, "grounding": grounding, "blocks": blocks}
 
 
 @app.get("/api/llm/health")
@@ -1034,12 +1097,18 @@ class TaskResult(BaseModel):
 async def warehouse():
     pool = await db()
     async with pool.acquire() as conn:
+        # Tasks are things the agent asked for during a run, so they are scoped.
+        # Inventory and inbound shipments below are the *world* — they exist
+        # whether or not anyone has run a test, and the floor screen should
+        # still show them.
+        run_id = await _active_run_id(conn)
         tasks = await conn.fetch(
             """select w.*, c.display_name as component_name, c.part_number
                  from warehouse_tasks w left join components c on c.id=w.component_id
+                where $1::bigint is not null and w.scenario_run_id = $1
                 order by case w.status when 'open' then 0 when 'in_progress' then 1 else 2 end,
                          case w.priority when 'urgent' then 0 when 'high' then 1 else 2 end,
-                         w.id desc limit 40""")
+                         w.id desc limit 40""", run_id)
         inv = await conn.fetch(
             """select i.*, c.display_name, c.part_number, c.is_hazmat,
                       round(i.usable_stock::numeric / nullif(i.daily_usage,0),1) as coverage_days
@@ -1141,6 +1210,9 @@ async def receive_shipment(b: ReceiptBody):
 async def approvals():
     pool = await db()
     async with pool.acquire() as conn:
+        run_id = await _active_run_id(conn)
+        if run_id is None:
+            return {"approvals": [], "scope": "no active run"}
         rows = await conn.fetch(
             """select a.*, i.title, i.severity::text as severity,
                       c.display_name as component_name,
@@ -1149,8 +1221,10 @@ async def approvals():
                  from approvals a
                  left join incidents i on i.id=a.incident_id
                  left join components c on c.id=i.component_id
-                order by case a.status when 'pending' then 0 else 1 end, a.id desc limit 30""")
-    return {"approvals": [dict(r) for r in rows]}
+                where a.scenario_run_id = $1
+                order by case a.status when 'pending' then 0 else 1 end, a.id desc limit 30""",
+            run_id)
+    return {"approvals": [dict(r) for r in rows], "scope": run_id}
 
 
 class ApproveBody(BaseModel):
@@ -1573,8 +1647,13 @@ async def business_context():
                  join components c on c.id=po.required_component
                  join inventory i on i.component_id=po.required_component
                 order by po.deadline""")
+        # The floor screens are a separate actor with their own URL, and the
+        # launcher cannot offer a facility it does not know exists.
+        whs = await conn.fetch(
+            "select id, name, city, country from warehouses order by id")
     return {"organization": dict(org) if org else None,
             "products": [dict(r) for r in prods],
+            "warehouses": [dict(r) for r in whs],
             "production": [dict(r) for r in orders]}
 
 
@@ -1725,6 +1804,10 @@ async def human_input():
     """
     pool = await db()
     async with pool.acquire() as conn:
+        # Same rule as everywhere else. A question the agent asked during a run
+        # that no longer exists is not a question anyone can usefully answer.
+        if await _active_run_id(conn) is None:
+            return {"open": [], "recent": [], "scope": "no active run"}
         return {"open": await supplier_portal.open_requests(conn),
                 "recent": await supplier_portal.recent_resolved(conn)}
 

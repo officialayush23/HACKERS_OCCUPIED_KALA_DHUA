@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { api, WS_URL } from './api'
+import { clearPersisted } from './persist'
 
 /**
  * Live audit stream.
@@ -34,14 +35,25 @@ export function useAgentStream() {
   // Anything derived from the world, refreshed on every event. This is a
   // denylist rather than a list of keys to remember: the previous version was
   // an allowlist, and every query key added afterwards silently went stale.
+  // Coalesced on purpose. A scenario emits a burst — twenty events inside two
+  // seconds — and an unthrottled sweep turns each one into a full refetch of
+  // every query on screen. That is where the wall of identical GETs in the
+  // server log came from, and it made the app slower exactly when it had the
+  // most to show. One sweep per burst is the same correctness at a fraction of
+  // the traffic.
+  const pending = useRef(null)
   const refresh = useCallback(() => {
-    qc.invalidateQueries({
-      predicate: (q) => q.queryKey?.[0] !== 'llm',
-      // 'active' (the default) leaves a query that is mounted-but-not-rendered
-      // — a page behind a tab, a panel inside a closed drawer — holding stale
-      // data, which is then shown the instant you navigate to it.
-      refetchType: 'all',
-    })
+    if (pending.current !== null) return
+    pending.current = setTimeout(() => {
+      pending.current = null
+      qc.invalidateQueries({
+        predicate: (q) => q.queryKey?.[0] !== 'llm',
+        // 'active' (the default) leaves a query that is mounted-but-not-rendered
+        // — a page behind a tab, a panel inside a closed drawer — holding stale
+        // data, which is then shown the instant you navigate to it.
+        refetchType: 'all',
+      })
+    }, 450)
   }, [qc])
 
   const merge = useCallback((incoming) => {
@@ -94,6 +106,9 @@ export function useAgentStream() {
           setEvents([])
           setClock(msg.clock)
           qc.clear()
+          // A wiped backend behind a warm on-disk cache shows ghosts on the
+          // next reload, which is the exact thing a hard reset is for.
+          clearPersisted()
         }
 
         setRevision((r) => r + 1)

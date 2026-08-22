@@ -133,6 +133,13 @@ export default function CommandBar({ open, onOpenChange, pages, onGoto }) {
                     <>
                       <p className="text-muted-foreground text-[11.5px]">{answer.question}</p>
                       <p className="mt-2 text-[13.5px] leading-relaxed">{answer.answer}</p>
+
+                      {answer.blocks?.length > 0 && (
+                        <div className="mt-4 flex flex-col gap-4">
+                          {answer.blocks.map((b, i) => <Block key={i} block={b} />)}
+                        </div>
+                      )}
+
                       {answer.grounding?.length > 0 && (
                         <div className="mt-3 flex flex-wrap gap-1.5">
                           {answer.grounding.slice(0, 6).map((g, i) => (
@@ -154,6 +161,102 @@ export default function CommandBar({ open, onOpenChange, pages, onGoto }) {
       </DialogContent>
     </Dialog>
   )
+}
+
+/**
+ * The answer, rendered rather than narrated.
+ *
+ * Prose is the wrong shape for "how much, of what, by when". These blocks are
+ * built server-side from the operational tables — the model never sees them and
+ * never writes them — so a figure on screen here is a figure that exists in the
+ * database, and the answer still carries its numbers when the model is
+ * unreachable.
+ */
+function Block({ block }) {
+  const title = (
+    <div className="text-muted-foreground text-[10px] font-medium tracking-[0.12em] uppercase">
+      {block.title}
+    </div>
+  )
+
+  if (block.kind === 'facts') {
+    return (
+      <div>
+        {title}
+        <div className="mt-2 flex flex-wrap gap-2">
+          {(block.items ?? []).map((it, i) => (
+            <div key={i} className="min-w-[9rem] rounded-lg border px-3 py-2">
+              <div className="text-muted-foreground font-mono text-[10px]">{it.label}</div>
+              <div className="mt-0.5 text-[13px] font-medium">{it.value}</div>
+              {it.sub && (
+                <div className="text-muted-foreground mt-0.5 text-[11px]">{it.sub}</div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  if (block.kind === 'table') {
+    const align = block.align ?? []
+    return (
+      <div>
+        {title}
+        <div className="mt-2 overflow-x-auto rounded-lg border">
+          <table className="w-full text-[12.5px]">
+            <thead>
+              <tr className="bg-muted/40">
+                {(block.columns ?? []).map((c, i) => (
+                  <th key={i}
+                      className={`text-muted-foreground px-3 py-2 text-[10px] font-medium
+                                  tracking-[0.1em] uppercase
+                                  ${align[i] === 'right' ? 'text-right' : 'text-left'}`}>
+                    {c}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {(block.rows ?? []).map((row, ri) => (
+                <tr key={ri} className="border-t">
+                  {row.map((cell, ci) => (
+                    <td key={ci}
+                        className={`px-3 py-2 ${align[ci] === 'right'
+                          ? 'text-right font-mono tabular-nums' : ''}`}>
+                      {cell}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {block.note && (
+          <p className="text-muted-foreground/70 mt-1.5 text-[10.5px] leading-relaxed">
+            {block.note}
+          </p>
+        )}
+      </div>
+    )
+  }
+
+  if (block.kind === 'list') {
+    return (
+      <div>
+        {title}
+        <ul className="mt-2 flex flex-col gap-1.5">
+          {(block.items ?? []).map((it, i) => (
+            <li key={i} className="flex gap-2 text-[12.5px] leading-relaxed">
+              <span className="text-muted-foreground/60 shrink-0">·</span>{it}
+            </li>
+          ))}
+        </ul>
+      </div>
+    )
+  }
+
+  return null
 }
 
 /** The affordance that tells people the bar exists at all. */

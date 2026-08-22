@@ -39,8 +39,8 @@ function Mark({ passed }) {
 }
 
 export default function Evaluation({ onRunSim }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ['evaluation'], queryFn: api.evaluation, refetchInterval: 4000 })
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['evaluation'], queryFn: api.evaluation, refetchInterval: 8000 })
   const { data: run } = useQuery({
     queryKey: ['activeRun'], queryFn: api.activeRun, refetchInterval: 4000 })
 
@@ -48,6 +48,25 @@ export default function Evaluation({ onRunSim }) {
   // below then renders as a real answer: "0/0 criteria met", verdict "—". That
   // is a scoreboard reporting a result nobody has computed. Say "working it
   // out" instead — it is the honest sentence and it is also the true one.
+  // A failing endpoint used to spin here forever: `isLoading` goes false, `data`
+  // stays undefined, and the spinner outlives the request that caused it. An
+  // error is a fact about the system and belongs on screen like any other.
+  if (error) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-10 text-center">
+        <ShieldAlert className="text-danger/70 size-7" />
+        <p className="text-[15px] font-medium">Could not evaluate this run</p>
+        <p className="text-muted-foreground max-w-md text-[12.5px] leading-relaxed">
+          {String(error.message)}
+        </p>
+        <p className="text-muted-foreground/70 max-w-md text-[11.5px] leading-relaxed">
+          The run's own artefacts are untouched — this is the scoring pass failing,
+          not the record of what happened.
+        </p>
+      </div>
+    )
+  }
+
   if (isLoading || !data) {
     return (
       <div className="text-muted-foreground flex h-full items-center justify-center gap-2.5
