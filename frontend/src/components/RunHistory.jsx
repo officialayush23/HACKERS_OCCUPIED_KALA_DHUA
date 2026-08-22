@@ -15,7 +15,7 @@ const STATUS = {
 
 export default function RunHistory({ revision }) {
   const qc = useQueryClient()
-  const { data } = useQuery({ queryKey: ['runs', revision], queryFn: api.runs })
+  const { data } = useQuery({ queryKey: ['runs'], queryFn: api.runs })
   const score = useMutation({
     mutationFn: api.score,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['runs'] }),

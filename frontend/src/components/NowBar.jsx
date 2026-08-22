@@ -42,7 +42,7 @@ function Item({ icon: Icon, tone = '', label, value, sub, onClick, pulse }) {
 }
 
 export default function NowBar({ onGoto }) {
-  const { data } = useQuery({ queryKey: ['now'], queryFn: api.now, refetchInterval: 3000 })
+  const { data } = useQuery({ queryKey: ['now'], queryFn: api.now})
 
   const queue = data?.queue ?? []
   // A question the agent declined to answer is as blocking as an approval — it

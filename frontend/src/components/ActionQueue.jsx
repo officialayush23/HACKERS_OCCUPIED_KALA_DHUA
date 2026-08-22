@@ -83,7 +83,7 @@ function Row({ item, onOpen, index }) {
 }
 
 export default function ActionQueue({ onGoto }) {
-  const { data } = useQuery({ queryKey: ['now'], queryFn: api.now, refetchInterval: 3000 })
+  const { data } = useQuery({ queryKey: ['now'], queryFn: api.now})
   const queue = data?.queue ?? []
 
   const open = (item) => {

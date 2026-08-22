@@ -60,9 +60,9 @@ function tone(pct, critical) {
 
 export default function Accuracy({ revision, onRunSim }) {
   const { data } = useQuery({
-    queryKey: ['accuracy', revision], queryFn: api.accuracy, refetchInterval: 5000 })
+    queryKey: ['accuracy'], queryFn: api.accuracy})
   const { data: run } = useQuery({
-    queryKey: ['activeRun'], queryFn: api.activeRun, refetchInterval: 4000 })
+    queryKey: ['activeRun'], queryFn: api.activeRun})
 
   const interp = data?.interpretation
   const violations = data?.constraint_compliance?.detail ?? []

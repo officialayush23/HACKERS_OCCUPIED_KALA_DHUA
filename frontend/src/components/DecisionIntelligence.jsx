@@ -75,7 +75,6 @@ export default function DecisionIntelligence({ incidentId, productionOrderId, on
   const { data, isLoading } = useQuery({
     queryKey: ['intelligence', incidentId ?? null, productionOrderId ?? null],
     queryFn: () => api.intelligence(incidentId, productionOrderId),
-    refetchInterval: 5000,
   })
 
   if (isLoading) {

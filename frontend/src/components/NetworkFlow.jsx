@@ -257,7 +257,7 @@ function HoverCard({ hover }) {
 export default function NetworkFlow({ revision, highlight = [] }) {
   const [hover, setHover] = useState(null)
   const { data } = useQuery({
-    queryKey: ['network', revision], queryFn: api.network, refetchInterval: 4000 })
+    queryKey: ['network'], queryFn: api.network})
   const { data: ctx } = useQuery({ queryKey: ['context'], queryFn: api.context })
 
   const nameOf = useMemo(() => {

@@ -387,8 +387,7 @@ export default function SupplierPortal({ supplierId }) {
   const [live, setLive] = useState(false)
 
   const { data, error } = useQuery({
-    queryKey: ['supplier', supplierId], queryFn: () => api.supplier(supplierId),
-    refetchInterval: 3000, retry: false })
+    queryKey: ['supplier', supplierId], queryFn: () => api.supplier(supplierId), retry: false })
 
   // Presence is what stands the scripted persona down. Announce arrival
   // immediately, keep it warm, and announce departure — a stale heartbeat would
@@ -697,8 +696,7 @@ export default function SupplierPortal({ supplierId }) {
 
 export function SupplierDirectory() {
   const { data } = useQuery({
-    queryKey: ['supplier-directory'], queryFn: api.supplierDirectory,
-    refetchInterval: 4000 })
+    queryKey: ['supplier-directory'], queryFn: api.supplierDirectory})
   const suppliers = data?.suppliers ?? []
 
   return (

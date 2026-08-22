@@ -57,7 +57,7 @@ function Group({ label, children, count }) {
 
 export default function AgentStatus({ events, onGoto }) {
   const { data: now } = useQuery({
-    queryKey: ['now'], queryFn: api.now, refetchInterval: 3000 })
+    queryKey: ['now'], queryFn: api.now})
 
   const incident = (now?.incidents ?? [])[0] ?? null
   const mine = incident

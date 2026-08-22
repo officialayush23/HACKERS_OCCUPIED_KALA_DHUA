@@ -25,14 +25,14 @@ const STATUS_COPY = {
 /** The single incident that matters right now, in business language. */
 export default function IncidentPanel({ revision, onOpenDecision }) {
   const { data, isLoading } = useQuery({
-    queryKey: ['incidents', revision], queryFn: api.incidents, refetchInterval: 4000 })
+    queryKey: ['incidents'], queryFn: api.incidents})
 
   const open = (data?.incidents ?? []).filter(
     (i) => !['resolved', 'failed'].includes(i.status))
   const top = open[0]
 
   const { data: detail } = useQuery({
-    queryKey: ['agentSteps', top?.id, revision],
+    queryKey: ['agentSteps', top?.id],
     queryFn: () => api.agentSteps(top.id), enabled: !!top,
   })
 

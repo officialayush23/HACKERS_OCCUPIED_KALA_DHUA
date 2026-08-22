@@ -22,6 +22,7 @@ import HumanInput from '@/components/HumanInput'
 import AuditPage from '@/components/AuditPage'
 import NowBar from '@/components/NowBar'
 import BusyBar from '@/components/BusyBar'
+import ErrorBoundary from '@/components/ErrorBoundary'
 import PortalLauncher from '@/components/PortalLauncher'
 import ActionQueue from '@/components/ActionQueue'
 import AgentStatus from '@/components/AgentStatus'
@@ -113,10 +114,10 @@ const SUBTITLE = {
 
 function Overview({ events, revision, onGoto, onRunSim }) {
   const { data: kpi } = useQuery({
-    queryKey: ['kpis', revision], queryFn: api.kpis, refetchInterval: 4000 })
+    queryKey: ['kpis'], queryFn: api.kpis})
   const { data: ctx } = useQuery({ queryKey: ['context'], queryFn: api.context })
   const { data: now } = useQuery({
-    queryKey: ['now'], queryFn: api.now, refetchInterval: 3000 })
+    queryKey: ['now'], queryFn: api.now})
 
   // One source of truth. Reading risk from `incidents` while reading the numbers
   // from `context` is what let this screen say "all clear" and "short by 310"
@@ -267,17 +268,17 @@ export default function App() {
   const meta = ALL_NAV.find((n) => n.id === page)
 
   const { data: kpi } = useQuery({
-    queryKey: ['kpis', revision], queryFn: api.kpis, refetchInterval: 5000 })
+    queryKey: ['kpis'], queryFn: api.kpis})
   const { data: ctx } = useQuery({ queryKey: ['context'], queryFn: api.context })
   const { data: wh } = useQuery({
-    queryKey: ['warehouse', revision], queryFn: api.warehouse, refetchInterval: 5000 })
+    queryKey: ['warehouse'], queryFn: api.warehouse})
   const { data: apr } = useQuery({
-    queryKey: ['approvals', revision], queryFn: api.approvals, refetchInterval: 5000 })
+    queryKey: ['approvals'], queryFn: api.approvals})
   // This one really does hit the model, so it is deliberately exempt from the
   // global short poll. A liveness badge is not worth a request every 4 seconds.
   const { data: llm } = useQuery({
     queryKey: ['llm'], queryFn: api.llmHealth,
-    staleTime: 120_000, refetchInterval: 120_000 })
+    staleTime: 120_000_000 })
 
   const criticals = kpi?.critical_incidents ?? 0
   const openTasks = (wh?.tasks ?? []).filter((t) => t.status === 'open').length
@@ -345,6 +346,7 @@ export default function App() {
           <motion.div key={page}
             initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
             transition={{ duration: 0.18 }} className="min-h-0 flex-1 overflow-hidden">
+           <ErrorBoundary resetKey={page}>
 
             {page === 'command' && (
               <Overview events={events} revision={revision} onGoto={setPage}
@@ -399,6 +401,7 @@ export default function App() {
             {page === 'questions' && <HumanInput />}
 
             {page === 'auditlog' && <AuditPage />}
+           </ErrorBoundary>
           </motion.div>
         </AnimatePresence>
         <CommandBar open={cmdOpen} onOpenChange={setCmdOpen}

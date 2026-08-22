@@ -23,7 +23,7 @@ const PO_STATUS = {
 
 export default function WorldState({ revision }) {
   const { data, isError, error } = useQuery({
-    queryKey: ['world', revision],
+    queryKey: ['world'],
     queryFn: api.world,
   })
 

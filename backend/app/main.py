@@ -1650,7 +1650,7 @@ async def business_context():
         # The floor screens are a separate actor with their own URL, and the
         # launcher cannot offer a facility it does not know exists.
         whs = await conn.fetch(
-            "select id, name, city, country from warehouses order by id")
+            "select id, name, city from warehouses order by id")
     return {"organization": dict(org) if org else None,
             "products": [dict(r) for r in prods],
             "warehouses": [dict(r) for r in whs],

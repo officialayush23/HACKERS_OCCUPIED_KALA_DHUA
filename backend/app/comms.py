@@ -14,7 +14,7 @@ import json
 from typing import Any
 
 from . import llm, parsing
-from .core import CLOCK, broadcast_state, db, emit
+from .core import CLOCK, broadcast_state, db, emit, run_context
 
 #: How a simulated counterparty behaves. Never revealed to the agent.
 PERSONAS: dict[str, dict[str, Any]] = {
@@ -58,11 +58,18 @@ async def open_thread(conn, *, incident_id: str | None, counterparty_type: str,
               and status <> 'closed' limit 1""", incident_id, counterparty_id)
     if existing:
         return existing
+    # Stamp the run. Threads were the one runtime artefact that never carried it,
+    # which is why the supplier portal happily showed four conversations in a
+    # world with no active run — the rows were real, they just belonged to a run
+    # that had been wiped. A conversation is evidence about a run like anything
+    # else.
     return await conn.fetchval(
         """insert into message_threads
-             (incident_id, counterparty_type, counterparty_id, counterparty_name, subject)
-           values ($1,$2,$3,$4,$5) returning id""",
-        incident_id, counterparty_type, counterparty_id, counterparty_name, subject)
+             (incident_id, counterparty_type, counterparty_id, counterparty_name,
+              subject, scenario_run_id)
+           values ($1,$2,$3,$4,$5,$6) returning id""",
+        incident_id, counterparty_type, counterparty_id, counterparty_name, subject,
+        (run_context() or {}).get("run_id"))
 
 
 async def post(conn, *, thread_id: int, direction: str, author_type: str,

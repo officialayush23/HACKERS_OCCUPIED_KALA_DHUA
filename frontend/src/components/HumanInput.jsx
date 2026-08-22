@@ -143,7 +143,7 @@ function Request({ req, onResolve, pending }) {
 export default function HumanInput({ onRunSim }) {
   const qc = useQueryClient()
   const { data } = useQuery({
-    queryKey: ['human-input'], queryFn: api.humanInput, refetchInterval: 3000 })
+    queryKey: ['human-input'], queryFn: api.humanInput})
 
   const resolve = useMutation({
     mutationFn: ({ id, body }) => api.resolveInput(id, body),

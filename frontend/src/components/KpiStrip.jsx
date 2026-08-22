@@ -48,7 +48,7 @@ function Kpi({ icon: Icon, label, value, sub, tone, data, delay, alarm }) {
 }
 
 export default function KpiStrip({ revision }) {
-  const { data: k } = useQuery({ queryKey: ['kpis', revision], queryFn: api.kpis })
+  const { data: k } = useQuery({ queryKey: ['kpis'], queryFn: api.kpis })
   const a = k?.activity ?? []
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">

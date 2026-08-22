@@ -28,7 +28,7 @@ export default function Approvals({ revision }) {
   const [note, setNote] = useState('')
 
   const { data } = useQuery({
-    queryKey: ['approvals', revision], queryFn: api.approvals, refetchInterval: 3000 })
+    queryKey: ['approvals'], queryFn: api.approvals})
 
   const decide = useMutation({
     // Decide the approval row itself. The old call only resumed the agent and

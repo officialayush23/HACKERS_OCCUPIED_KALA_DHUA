@@ -265,7 +265,7 @@ export default function WarehouseOps({ revision }) {
   const [receipt, setReceipt] = useState(null)   // the last thing that happened
 
   const { data } = useQuery({
-    queryKey: ['warehouse', revision], queryFn: api.warehouse, refetchInterval: 4000 })
+    queryKey: ['warehouse'], queryFn: api.warehouse})
 
   const done = () => refresh(qc, 'world')
 

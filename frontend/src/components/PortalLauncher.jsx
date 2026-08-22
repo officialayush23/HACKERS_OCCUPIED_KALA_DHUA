@@ -54,8 +54,7 @@ function Row({ href, icon: Icon, title, sub, right, tone }) {
 
 export default function PortalLauncher() {
   const { data } = useQuery({
-    queryKey: ['supplier-directory'], queryFn: api.supplierDirectory,
-    refetchInterval: 8000 })
+    queryKey: ['supplier-directory'], queryFn: api.supplierDirectory})
   const { data: ctx } = useQuery({ queryKey: ['context'], queryFn: api.context })
 
   const suppliers = data?.suppliers ?? []

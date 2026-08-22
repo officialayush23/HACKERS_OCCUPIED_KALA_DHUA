@@ -219,7 +219,7 @@ function Case({ incident, events, lens }) {
 export default function DecisionLog({ events }) {
   const [lens, setLens] = useState('business')
   const { data: now } = useQuery({
-    queryKey: ['now'], queryFn: api.now, refetchInterval: 5000 })
+    queryKey: ['now'], queryFn: api.now})
 
   const incidents = now?.incidents ?? []
 

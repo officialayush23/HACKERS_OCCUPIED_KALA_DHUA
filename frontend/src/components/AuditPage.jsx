@@ -36,7 +36,6 @@ export default function AuditPage() {
   const { data } = useQuery({
     queryKey: ['audit-all', runId],
     queryFn: () => api.auditAll(runId === ALL ? null : Number(runId)),
-    refetchInterval: 4000,
   })
   const { data: runs } = useQuery({ queryKey: ['runs'], queryFn: api.runs })
 

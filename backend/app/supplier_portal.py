@@ -111,12 +111,19 @@ async def overview(conn, supplier_id: str) -> dict[str, Any]:
     if sup is None:
         raise ValueError(f"unknown supplier {supplier_id}")
 
+    # Scoped to the run, like everything else. A supplier looking at four
+    # conversations from a run that was wiped an hour ago is being shown
+    # evidence about a world that no longer exists, and replying to it would
+    # write into a thread the agent is not reading.
+    run_id = await conn.fetchval("select scenario_run_id from active_run where id")
     threads = await conn.fetch(
         """select t.*, (select count(*) from thread_messages m where m.thread_id = t.id)
                          as message_count
              from message_threads t
             where t.counterparty_id = $1 and t.counterparty_type = 'supplier'
-            order by t.id desc limit 20""", supplier_id)
+              and ($2::bigint is null or t.scenario_run_id = $2
+                   or t.scenario_run_id is null)
+            order by t.id desc limit 20""", supplier_id, run_id)
 
     out_threads = []
     for t in threads:
@@ -132,8 +139,14 @@ async def overview(conn, supplier_id: str) -> dict[str, Any]:
         out_threads.append({
             **dict(t),
             "messages": msgs,
-            # "They are waiting on you" is the only question this screen answers.
-            "awaiting_you": bool(last_out and (not last_in or last_in["id"] < last_out["id"])),
+            # "They are waiting on you" is the only question this screen answers,
+            # and it has to be the *same* question the operations side counts on
+            # the other screen. Two definitions of waiting is how the launcher
+            # came to say "1 unanswered" next to a portal saying "nothing
+            # waiting on you" — both were right about different things.
+            "awaiting_you": (t["status"] == "awaiting_reply"
+                             or bool(last_out and (not last_in
+                                                   or last_in["id"] < last_out["id"]))),
         })
 
     catalog = await conn.fetch(

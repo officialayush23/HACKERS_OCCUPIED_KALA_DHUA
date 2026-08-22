@@ -15,9 +15,15 @@ import { AnimatePresence, motion } from 'motion/react'
  * is still readable and still true, it is simply about to be truer.
  */
 export default function BusyBar() {
-  const fetching = useIsFetching({ predicate: (q) => q.queryKey?.[0] !== 'llm' })
+  // Only what a person is actually waiting on: a query with nothing to show
+  // yet, or a write in flight. A background refetch of data already on screen
+  // is not waiting — counting those made the bar animate permanently, which
+  // means it stopped saying anything at all.
+  const loading = useIsFetching({
+    predicate: (q) => q.queryKey?.[0] !== 'llm' && q.state.data === undefined,
+  })
   const mutating = useIsMutating()
-  const busy = fetching > 0 || mutating > 0
+  const busy = loading > 0 || mutating > 0
 
   return (
     <AnimatePresence>

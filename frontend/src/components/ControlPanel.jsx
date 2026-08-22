@@ -35,7 +35,6 @@ export default function ControlPanel() {
   const { data } = useQuery({
     queryKey: ['scenarios'],
     queryFn: api.scenarios,
-    refetchInterval: 3000,
   })
 
   const invalidate = () => {

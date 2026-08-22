@@ -72,7 +72,24 @@ async def _step(conn, incident_id: str, label: str, *, status: str = "done",
                           {"incident_id": incident_id, "label": label, "status": status})
 
 
+# The database enum, mirrored. Two values in this file were never members of it
+# — "monitoring" and "reopened" — and each one killed the agent at the very last
+# step of an otherwise successful run: plan chosen, order raised, then a crash
+# on the status update. Duplicating the list here is worth it because the
+# assertion below turns a runtime 500 deep in a background task into a loud,
+# obvious failure the first time anyone runs that path.
+INCIDENT_STATUSES = frozenset({
+    "open", "investigating", "planning", "awaiting_approval",
+    "executing", "verifying", "resolved", "failed",
+})
+
+
 async def _set_status(conn, incident_id: str, status: str) -> None:
+    if status not in INCIDENT_STATUSES:
+        raise ValueError(
+            f"{status!r} is not an incident_status. Valid values are "
+            f"{sorted(INCIDENT_STATUSES)}. Add it to the enum in a migration "
+            f"before using it here.")
     await conn.execute("update incidents set status=$2::incident_status where id=$1",
                        incident_id, status)
     _STATE.setdefault(incident_id, {})["status"] = status
@@ -562,7 +579,7 @@ async def execute(conn, incident_id: str) -> None:
                human_summary=f"ERP updated with {len(created)} new purchase order(s).",
                payload={"purchase_orders": created})
 
-    await _set_status(conn, incident_id, "monitoring")
+    await _set_status(conn, incident_id, "verifying")
     await _step(conn, incident_id,
                 "Monitoring. I will not close this until usable stock is confirmed at the plant.")
     await broadcast_state("incident_executing", {"incident_id": incident_id})
@@ -639,7 +656,7 @@ async def verify(conn, incident_id: str) -> dict[str, Any]:
 
     await conn.execute(
         "update incidents set reopen_count = reopen_count + 1 where id=$1", incident_id)
-    await _set_status(conn, incident_id, "reopened")
+    await _set_status(conn, incident_id, "investigating")
     await _step(conn, incident_id,
                 f"Recovery did not hold — still {shortfall} units short of usable stock. "
                 f"Reopening and replanning.", status="warning")

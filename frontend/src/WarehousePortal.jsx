@@ -261,7 +261,7 @@ export default function WarehousePortal({ warehouseId = 'Pune-Plant-1' }) {
   const [live, setLive] = useState(false)
 
   const { data } = useQuery({
-    queryKey: ['warehouse'], queryFn: api.warehouse, refetchInterval: 3000 })
+    queryKey: ['warehouse'], queryFn: api.warehouse})
 
   // Same socket as the operations dashboard. When the agent raises a task, this
   // screen lights up without anybody refreshing anything.

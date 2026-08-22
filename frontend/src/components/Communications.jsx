@@ -130,8 +130,8 @@ export default function Communications({ revision, incidentId, onGoto }) {
   const [draft, setDraft] = useState('')
 
   const { data, isLoading } = useQuery({
-    queryKey: ['threads', incidentId, revision],
-    queryFn: () => api.threads(incidentId), refetchInterval: 3000,
+    queryKey: ['threads', incidentId],
+    queryFn: () => api.threads(incidentId),
   })
 
   const threads = useMemo(() => data?.threads ?? [], [data])

@@ -67,7 +67,7 @@ export default function MapView({ revision, onFallback }) {
   const [sel, setSel] = useState(null)
 
   const { data } = useQuery({
-    queryKey: ['network', revision], queryFn: api.network, refetchInterval: 5000 })
+    queryKey: ['network'], queryFn: api.network})
 
   const dark = typeof document !== 'undefined' &&
     document.documentElement.classList.contains('dark')

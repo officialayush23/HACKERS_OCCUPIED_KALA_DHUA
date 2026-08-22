@@ -40,9 +40,9 @@ function Mark({ passed }) {
 
 export default function Evaluation({ onRunSim }) {
   const { data, isLoading, error } = useQuery({
-    queryKey: ['evaluation'], queryFn: api.evaluation, refetchInterval: 8000 })
+    queryKey: ['evaluation'], queryFn: api.evaluation})
   const { data: run } = useQuery({
-    queryKey: ['activeRun'], queryFn: api.activeRun, refetchInterval: 4000 })
+    queryKey: ['activeRun'], queryFn: api.activeRun})
 
   // While the first fetch is in flight `data` is undefined, and every `?? 0`
   // below then renders as a real answer: "0/0 criteria met", verdict "—". That
