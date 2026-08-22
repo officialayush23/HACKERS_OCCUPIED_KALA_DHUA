@@ -29,6 +29,8 @@ export const api = {
   // simulation
   scenarios:   ()          => req('/api/scenarios'),
   inject:      (id)        => post(`/api/scenarios/${id}/inject`),
+  customScenario: (b)      => post('/api/scenarios/custom', b),
+  removeScenario: (id)     => req(`/api/scenarios/custom/${id}`, { method: 'DELETE' }),
   reset:       (m='demo')  => post(`/api/scenarios/reset?mode=${m}`),
   customEvent: (b)         => post('/api/events/custom', b),
   log:         (text)      => post('/api/logs', { text }),

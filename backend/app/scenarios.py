@@ -203,3 +203,90 @@ EVENT_TYPES = [
     "expedite_unavailable",
     "hazmat_disruption",
 ]
+
+
+# ---------------------------------------------------------------- custom ----
+#
+# Anyone testing this — a judge, a teammate, someone who has never seen the code
+# — should be able to write their own disruption and watch the agent handle it,
+# without editing Python. A custom scenario is registered into the same
+# SCENARIOS dict the built-ins live in, so it runs down the identical, tested
+# code path. There is no separate "custom" execution mode to diverge.
+
+MAX_CUSTOM_EVENTS = 40
+MAX_CUSTOM_HORIZON_H = 720          # 30 simulated days
+
+
+def _slug(name: str) -> str:
+    keep = [c.lower() if c.isalnum() else "-" for c in name.strip()[:40]]
+    out = "".join(keep).strip("-")
+    while "--" in out:
+        out = out.replace("--", "-")
+    return out or "untitled"
+
+
+def validate_custom(name: str, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Reject a bad scenario with a message a human can act on.
+
+    Every failure names the offending event by index and says what was expected.
+    A validator that only says "invalid" makes people give up.
+    """
+    if not name or not name.strip():
+        raise ValueError("give the scenario a name")
+    if not isinstance(events, list) or not events:
+        raise ValueError("a scenario needs at least one event")
+    if len(events) > MAX_CUSTOM_EVENTS:
+        raise ValueError(f"at most {MAX_CUSTOM_EVENTS} events per scenario, got {len(events)}")
+
+    clean: list[dict[str, Any]] = []
+    for i, ev in enumerate(events):
+        where = f"event {i + 1}"
+        if not isinstance(ev, dict):
+            raise ValueError(f"{where} must be an object")
+        etype = ev.get("type")
+        if etype not in EVENT_TYPES:
+            raise ValueError(
+                f"{where}: unknown type '{etype}'. One of: {', '.join(EVENT_TYPES)}")
+        params = ev.get("params", {})
+        if not isinstance(params, dict):
+            raise ValueError(f"{where}: params must be an object")
+        try:
+            at_h = float(ev.get("at_h", 0))
+        except (TypeError, ValueError):
+            raise ValueError(f"{where}: at_h must be a number of simulated hours")
+        if at_h < 0 or at_h > MAX_CUSTOM_HORIZON_H:
+            raise ValueError(
+                f"{where}: at_h must be between 0 and {MAX_CUSTOM_HORIZON_H}")
+        clean.append({"at_h": at_h, "type": etype, "params": params,
+                      "note": (ev.get("note") or None)})
+
+    clean.sort(key=lambda e: e["at_h"])
+    return clean
+
+
+def register_custom(name: str, events: list[dict[str, Any]],
+                    tests: str | None = None) -> str:
+    """Add a scenario at runtime. Returns its id.
+
+    Custom scenarios are in-memory only: they vanish on restart, and they cannot
+    overwrite a built-in. Both properties are deliberate — a test someone typed
+    in should never quietly become part of the shipped suite.
+    """
+    clean = validate_custom(name, events)
+    sid = f"CUSTOM-{_slug(name)}"
+    if sid in SCENARIOS and not sid.startswith("CUSTOM-"):
+        raise ValueError(f"'{sid}' collides with a built-in scenario")
+    SCENARIOS[sid] = {
+        "id": sid,
+        "title": name.strip(),
+        "tests": tests.strip() if tests else "Custom scenario.",
+        "events": clean,
+        "custom": True,
+    }
+    return sid
+
+
+def unregister_custom(scenario_id: str) -> None:
+    if not scenario_id.startswith("CUSTOM-"):
+        raise ValueError("only custom scenarios can be removed")
+    SCENARIOS.pop(scenario_id, None)

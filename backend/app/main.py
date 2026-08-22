@@ -18,7 +18,8 @@ from pydantic import BaseModel
 from .core import (APPROVAL_THRESHOLD_INR, CLOCK, HUB, close_db, db, emit,
                     set_run_context)
 from . import injector
-from .scenarios import EVENT_TYPES, SCENARIOS, list_scenarios
+from .scenarios import (EVENT_TYPES, SCENARIOS, list_scenarios,
+                        register_custom, unregister_custom)
 from .solver import solve_for_production_order
 from .scorer import score_run
 from . import agent, comms, learning, llm
@@ -105,6 +106,47 @@ async def inject(scenario_id: str):
         return await injector.inject(scenario_id)
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+class CustomScenario(BaseModel):
+    name: str
+    events: list[dict[str, Any]]
+    tests: str | None = None
+    run: bool = True
+
+
+@app.post("/api/scenarios/custom")
+async def add_custom_scenario(body: CustomScenario):
+    """Register a scenario written by whoever is testing this, and run it.
+
+    It goes into the same registry the built-ins live in, so it executes down the
+    identical code path — there is no separate "custom" mode that could behave
+    differently from the one we demo. Custom scenarios are in-memory only and
+    disappear on restart, so nothing anyone types here can become a permanent
+    part of the suite by accident.
+    """
+    try:
+        sid = register_custom(body.name, body.events, body.tests)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    detail = next((s for s in list_scenarios() if s["id"] == sid), None)
+    if not body.run:
+        return {"scenario_id": sid, "scenario": detail, "status": "registered"}
+    try:
+        out = await injector.inject(sid)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    return {**out, "scenario": detail}
+
+
+@app.delete("/api/scenarios/custom/{scenario_id}")
+async def remove_custom_scenario(scenario_id: str):
+    try:
+        unregister_custom(scenario_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "removed": scenario_id}
 
 
 @app.post("/api/events/custom")

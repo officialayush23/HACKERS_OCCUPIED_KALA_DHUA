@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'motion/react'
 import {
-  AlertTriangle, Check, FlaskConical, Loader2, Play, RotateCcw, Square,
+  AlertTriangle, Check, FlaskConical, Loader2, Play, Plus, RotateCcw,
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
@@ -12,6 +12,98 @@ import { Separator } from '@/components/ui/separator'
 import {
   Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
 } from '@/components/ui/sheet'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Textarea } from '@/components/ui/textarea'
+import { Input } from '@/components/ui/input'
+
+const EXAMPLE = `[
+  { "at_h": 0,  "type": "supplier_delay",
+    "params": { "po_id": "PO-7712", "delay_days": 6 } },
+  { "at_h": 8,  "type": "demand_spike",
+    "params": { "component_id": "COMP-104", "daily_usage": 200 },
+    "note": "an OEM pulls a bigger order forward" },
+  { "at_h": 12, "type": "supplier_claim",
+    "params": { "po_id": "PO-7712", "claim": "dispatched" } },
+  { "at_h": 13, "type": "tracking_state",
+    "params": { "po_id": "PO-7712", "tracking_status": "not_shipped" } }
+]`
+
+/** Write your own disruption. Same event types, same execution path. */
+function CustomTab({ eventTypes, onDone }) {
+  const [name, setName] = useState('')
+  const [json, setJson] = useState(EXAMPLE)
+  const [error, setError] = useState(null)
+
+  const add = useMutation({
+    mutationFn: (body) => api.customScenario(body),
+    onSuccess: () => { setError(null); onDone() },
+    onError: (e) => setError(e.message),
+  })
+
+  const submit = () => {
+    let events
+    try {
+      events = JSON.parse(json)
+    } catch (e) {
+      return setError(`That is not valid JSON — ${e.message}`)
+    }
+    setError(null)
+    add.mutate({ name: name || 'Custom scenario', events, run: true })
+  }
+
+  return (
+    <div className="flex flex-col gap-5">
+      <p className="text-muted-foreground text-[12.5px] leading-relaxed">
+        Write your own disruption and the agent will handle it live. It runs down the
+        same code path as the built-in scenarios — there is no separate mode. Custom
+        scenarios live in memory only and disappear when the server restarts.
+      </p>
+
+      <label className="flex flex-col gap-1.5">
+        <span className="text-muted-foreground text-[10px] font-medium
+                         tracking-[0.12em] uppercase">Name it</span>
+        <Input value={name} onChange={(e) => setName(e.target.value)}
+               placeholder="e.g. Two suppliers fail at once"
+               className="h-9 text-[13px]" />
+      </label>
+
+      <label className="flex flex-col gap-1.5">
+        <span className="text-muted-foreground text-[10px] font-medium
+                         tracking-[0.12em] uppercase">Events</span>
+        <Textarea value={json} onChange={(e) => setJson(e.target.value)}
+                  spellCheck={false} rows={14}
+                  className="font-mono text-[11.5px] leading-relaxed" />
+        <span className="text-muted-foreground text-[10.5px] leading-relaxed">
+          <b>at_h</b> is when it fires, in simulated hours from the start.
+          One real second is one simulated hour.
+        </span>
+      </label>
+
+      <div>
+        <div className="text-muted-foreground mb-2 text-[10px] font-medium
+                        tracking-[0.12em] uppercase">Event types you can use</div>
+        <div className="flex flex-wrap gap-1.5">
+          {(eventTypes ?? []).map((t) => (
+            <Badge key={t} variant="outline" className="font-mono text-[10px]">{t}</Badge>
+          ))}
+        </div>
+      </div>
+
+      {error && (
+        <div className="border-danger/40 bg-danger/[0.07] text-danger flex items-start gap-2
+                        rounded-xl border px-4 py-3 text-[12.5px] leading-relaxed">
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />{error}
+        </div>
+      )}
+
+      <Button size="lg" disabled={add.isPending} onClick={submit} className="h-10">
+        {add.isPending ? <Loader2 className="size-4 animate-spin" />
+                       : <Plus className="size-4" />}
+        Register and run
+      </Button>
+    </div>
+  )
+}
 
 /**
  * Run a simulation.
@@ -43,6 +135,14 @@ export default function SimulationDrawer({ open, onOpenChange }) {
   const running = data?.running ?? []
   const selected = scenarios.find((s) => s.id === picked) ?? scenarios[0] ?? null
 
+  // Read everything out up front. AnimatePresence re-renders the exiting child,
+  // so any dereference of `selected` inside it crashes the instant it is null.
+  const selId    = selected?.id ?? 'none'
+  const selTitle = selected?.title ?? ''
+  const selFeed  = selected?.feed ?? []
+  const selCount = selected?.event_count ?? 0
+  const selSpan  = selected?.span_sim_hours ?? 0
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 sm:max-w-[34rem]">
@@ -57,7 +157,23 @@ export default function SimulationDrawer({ open, onOpenChange }) {
           </SheetDescription>
         </SheetHeader>
 
-        <ScrollArea className="min-h-0 flex-1">
+        <Tabs defaultValue="built-in" className="flex min-h-0 flex-1 flex-col gap-0">
+          <TabsList className="mx-7 mt-5 w-auto self-start">
+            <TabsTrigger value="built-in" className="text-[12.5px]">Built-in</TabsTrigger>
+            <TabsTrigger value="custom" className="text-[12.5px]">Write your own</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="custom" className="min-h-0 flex-1">
+            <ScrollArea className="h-full">
+              <div className="p-7">
+                <CustomTab eventTypes={data?.event_types}
+                           onDone={() => { qc.invalidateQueries(); onOpenChange(false) }} />
+              </div>
+            </ScrollArea>
+          </TabsContent>
+
+          <TabsContent value="built-in" className="min-h-0 flex-1">
+        <ScrollArea className="h-full">
           <div className="flex flex-col gap-6 p-7">
 
             {running.length > 0 && (
@@ -105,8 +221,8 @@ export default function SimulationDrawer({ open, onOpenChange }) {
 
             {/* what it feeds in */}
             <AnimatePresence mode="wait">
-              {selected && (
-                <motion.div key={selected.id}
+              {selFeed.length > 0 && (
+                <motion.div key={selId}
                             initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
                             exit={{ opacity: 0 }}>
                   <Separator className="mb-6" />
@@ -115,12 +231,12 @@ export default function SimulationDrawer({ open, onOpenChange }) {
                     What gets fed in
                   </h3>
                   <p className="text-muted-foreground mt-2 text-[12px] leading-relaxed">
-                    {selected.event_count} event{selected.event_count > 1 ? 's' : ''} over
-                    {' '}{selected.span_sim_hours} simulated hours.
+                    {selCount} event{selCount > 1 ? 's' : ''} over{' '}
+                    {selSpan} simulated hours.
                   </p>
 
                   <ol className="mt-4 flex flex-col gap-3.5">
-                    {(selected.feed ?? []).map((f, i) => (
+                    {selFeed.map((f, i) => (
                       <li key={i} className="flex gap-3">
                         <span className="text-muted-foreground w-10 shrink-0 pt-[1px]
                                          font-mono text-[11px] tabular-nums">
@@ -141,14 +257,17 @@ export default function SimulationDrawer({ open, onOpenChange }) {
             </AnimatePresence>
           </div>
         </ScrollArea>
+          </TabsContent>
+        </Tabs>
 
         {/* the only two things you can do here */}
         <div className="flex items-center gap-3 border-t px-7 py-5">
           <Button size="lg" disabled={!selected || run.isPending}
-                  onClick={() => run.mutate(selected.id)} className="h-10 flex-1">
+                  onClick={() => selected && run.mutate(selected.id)}
+                  className="h-10 flex-1">
             {run.isPending ? <Loader2 className="size-4 animate-spin" />
                            : <Play className="size-4" />}
-            Run {selected?.title ? `“${selected.title}”` : ''}
+            Run{selTitle ? ` \u201c${selTitle}\u201d` : ''}
           </Button>
 
           <Button variant="outline" size="lg" disabled={reset.isPending}

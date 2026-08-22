@@ -11,11 +11,10 @@ import Communications from '@/components/Communications'
 import WarehouseOps from '@/components/WarehouseOps'
 import Approvals from '@/components/Approvals'
 import NetworkFlow from '@/components/NetworkFlow'
-import ControlPanel from '@/components/ControlPanel'
-import EventTimeline from '@/components/EventTimeline'
 import WorldState from '@/components/WorldState'
 import DecisionExplorer from '@/components/DecisionExplorer'
 import RunHistory from '@/components/RunHistory'
+import DecisionLog from '@/components/DecisionLog'
 import NowBar from '@/components/NowBar'
 import ActionQueue from '@/components/ActionQueue'
 import AgentStatus from '@/components/AgentStatus'
@@ -323,16 +322,7 @@ export default function App() {
             {page === 'comms' && <Communications revision={revision} />}
             {page === 'warehouse' && <WarehouseOps revision={revision} />}
 
-            {page === 'audit' && (
-              <div className="grid h-full grid-cols-12">
-                <div className="col-span-8 min-h-0 border-r">
-                  <EventTimeline events={events} status={status} />
-                </div>
-                <ScrollArea className="glass-panel col-span-4 min-h-0">
-                  <div className="p-4"><ControlPanel /></div>
-                </ScrollArea>
-              </div>
-            )}
+            {page === 'audit' && <DecisionLog events={events} />}
 
             {page === 'scoring' && (
               <div className="grid h-full grid-cols-12">
