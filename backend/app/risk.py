@@ -34,6 +34,14 @@ class ThreatenedOrder:
     shortfall: int
     hours_to_deadline: float
     coverage_hours: float
+    # The working, not just the answer. A shortfall that changes between runs
+    # without showing why reads as the system contradicting itself; with the
+    # inputs attached it reads as a different world, which is what it is.
+    required_units: int = 0
+    usable_stock: int = 0
+    erp_stock: int = 0
+    safety_stock: int = 0
+    incoming_before_deadline: int = 0
 
 
 @dataclass
@@ -106,7 +114,12 @@ async def assess(conn, component_id: str, *, trigger: str) -> RiskVerdict:
                 product_name=r["product_name"], oem_customer=r["oem_customer"],
                 priority=r["priority"], shortfall=shortfall - incoming,
                 hours_to_deadline=round(hours_left, 1),
-                coverage_hours=round(coverage_hours, 1)))
+                coverage_hours=round(coverage_hours, 1),
+                required_units=int(r["required_units"]),
+                usable_stock=usable,
+                erp_stock=int(r["erp_stock"]),
+                safety_stock=int(r["safety_stock"]),
+                incoming_before_deadline=incoming))
 
         if int(r["erp_stock"]) != usable:
             reasons.append(

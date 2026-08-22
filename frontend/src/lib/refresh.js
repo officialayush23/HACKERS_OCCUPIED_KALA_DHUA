@@ -37,6 +37,12 @@ export function refresh(qc, which = 'world') {
     // Sweep. `predicate` sees every cached query, so nothing can be forgotten.
     qc.invalidateQueries({
       predicate: (q) => !STATIC.has(q.queryKey?.[0]),
+      // 'active' is the React Query default and it leaves anything mounted but
+      // not currently rendered — a page behind a tab, a panel in a closed
+      // drawer — holding the data it had before the run started. You then
+      // navigate to it and see the old world, which is exactly the "I had to
+      // refresh the page" symptom.
+      refetchType: 'all',
     })
     return
   }

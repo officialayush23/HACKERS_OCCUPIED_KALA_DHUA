@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { motion } from 'motion/react'
-import { Check, ClipboardCheck, Minus, ShieldAlert, X } from 'lucide-react'
+import { Check, ClipboardCheck, Loader2, Minus, ShieldAlert, X } from 'lucide-react'
 import { api } from '@/lib/api'
 import NoRun from '@/components/NoRun'
 import { Badge } from '@/components/ui/badge'
@@ -44,7 +44,20 @@ export default function Evaluation({ onRunSim }) {
   const { data: run } = useQuery({
     queryKey: ['activeRun'], queryFn: api.activeRun, refetchInterval: 4000 })
 
-  if (!isLoading && !data?.evaluated) {
+  // While the first fetch is in flight `data` is undefined, and every `?? 0`
+  // below then renders as a real answer: "0/0 criteria met", verdict "—". That
+  // is a scoreboard reporting a result nobody has computed. Say "working it
+  // out" instead — it is the honest sentence and it is also the true one.
+  if (isLoading || !data) {
+    return (
+      <div className="text-muted-foreground flex h-full items-center justify-center gap-2.5
+                      text-[13px]">
+        <Loader2 className="size-4 animate-spin" />Recomputing this run's criteria…
+      </div>
+    )
+  }
+
+  if (!data?.evaluated) {
     return (
       <NoRun icon={ClipboardCheck}
              title="Not evaluated"

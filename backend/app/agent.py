@@ -18,12 +18,16 @@ Command Center reads like a person narrating their work.
 from __future__ import annotations
 
 import asyncio
+import logging
+import traceback
 import json
 from typing import Any
 
 from . import comms, learning, llm
 from .core import (APPROVAL_THRESHOLD_INR, CLOCK, broadcast_state, db, emit,
                    next_incident_id, run_context)
+
+logger = logging.getLogger("disruptionops.agent")
 from .risk import assess
 from .solver import solve_for_production_order
 
@@ -90,8 +94,22 @@ async def wake(conn, *, component_id: str, trigger: str,
     """DETECT + TRIAGE. Returns the incident id if the agent took ownership."""
     verdict = await assess(conn, component_id, trigger=trigger)
 
+    # Show the working. "Short by 160" on one run and "short by 460" on the next
+    # looks like the system disagreeing with itself unless the inputs are
+    # attached to the number — they are different worlds, not different opinions.
+    w = verdict.threatened[0] if verdict.threatened else None
     await emit(conn, actor="risk_detector", event_type="RISK_ASSESSED",
                human_summary=verdict.headline,
+               agent_reason=(
+                   f"required {w.required_units} "
+                   f"- usable {w.usable_stock} "
+                   f"+ safety {w.safety_stock} "
+                   f"- inbound landing before the deadline {w.incoming_before_deadline} "
+                   f"= {w.shortfall} short. ERP says {w.erp_stock}; I used the "
+                   f"warehouse figure, not the ERP one, because only one of them has "
+                   f"been counted."
+                   if w else
+                   "No production order is short once inbound stock is counted."),
                payload=verdict.to_dict())
 
     if not verdict.threatens_production:
@@ -144,18 +162,59 @@ async def wake(conn, *, component_id: str, trigger: str,
 
 
 async def _run(incident_id: str) -> None:
+    """One pass of the loop, with an honest ending in every branch.
+
+    This used to swallow a crash into a single AGENT_STEP labelled "Agent hit an
+    error" and then return. The incident stayed in `investigating` forever, so
+    the dashboard reported "Still deciding" indefinitely and every downstream
+    screen — decisions, evaluation, accuracy — sat at zero with no explanation.
+    A run that died looked exactly like a run that was thinking.
+
+    An agent that stops must say so, in the same log as everything else.
+    """
     pool = await db()
     try:
         async with pool.acquire() as conn:
+            await emit(conn, incident_id=incident_id, actor="agent",
+                       event_type="AGENT_RUN_STARTED",
+                       human_summary="Agent picked up the incident.",
+                       agent_reason=("Investigate, then contact, then plan. The order is "
+                                     "fixed: I do not ask a supplier for a price before I "
+                                     "know what I am short of."),
+                       payload={"incident_id": incident_id})
             await _investigate(conn, incident_id)
             await _communicate(conn, incident_id)
             await _plan_and_validate(conn, incident_id)
+            await emit(conn, incident_id=incident_id, actor="agent",
+                       event_type="AGENT_RUN_FINISHED",
+                       human_summary="Agent finished this pass.",
+                       payload={"incident_id": incident_id})
     except asyncio.CancelledError:
         raise
     except Exception as exc:                       # noqa: BLE001
+        trace = traceback.format_exc()
+        logger.exception("agent run failed for %s", incident_id)
         pool2 = await db()
         async with pool2.acquire() as conn:
-            await _step(conn, incident_id, f"Agent hit an error: {exc}", status="error")
+            await _step(conn, incident_id, f"Agent stopped: {exc}", status="error")
+            # A distinct event type, so the UI can say "this run failed" rather
+            # than leaving a spinner up. The traceback goes in the technical
+            # projection — a judge reading the Technical tab should see the
+            # actual failure, not a sanitised version of it.
+            await emit(conn, incident_id=incident_id, actor="agent",
+                       event_type="AGENT_FAILED",
+                       human_summary=f"The agent stopped before finishing: {exc}",
+                       agent_reason=("I could not complete this pass. Reporting the stop is "
+                                     "the correct behaviour — continuing to display "
+                                     "'still deciding' would be a claim that I am still "
+                                     "working on it, and I am not."),
+                       payload={"incident_id": incident_id, "error": str(exc),
+                                "error_type": type(exc).__name__, "traceback": trace})
+            try:
+                await conn.execute(
+                    "update incidents set status='failed' where id=$1", incident_id)
+            except Exception:                      # noqa: BLE001
+                pass
     finally:
         _RUNNING.pop(incident_id, None)
 

@@ -107,9 +107,31 @@ export default function SimulationDrawer({ open, onOpenChange }) {
   const done = () => { setError(null); refresh(qc, 'simulation') }
   const fail = (e) => setError(e.message)
 
+  // Starting a run is the one moment where "invalidate and hope" is not enough.
+  // The backend answers the moment the scenario is *accepted*; the events it
+  // describes are written by a background task over the following seconds. A
+  // plain invalidate fires once, refetches an empty world, and then nothing
+  // asks again — which is why the dashboard used to need a manual refresh
+  // before any of the run appeared.
+  //
+  // So: sweep everything (including inactive queries), then explicitly refetch
+  // the two queries the whole app is scoped by, and await them, so the run is
+  // real on screen before the drawer closes. The socket and the poll carry it
+  // from there.
   const run = useMutation({
     mutationFn: api.inject,
-    onSuccess: () => { done(); onOpenChange(false) },
+    onSuccess: async () => {
+      setError(null)
+      await qc.invalidateQueries({
+        predicate: (q) => q.queryKey?.[0] !== 'llm',
+        refetchType: 'all',
+      })
+      await Promise.all([
+        qc.refetchQueries({ queryKey: ['now'] }),
+        qc.refetchQueries({ queryKey: ['activeRun'] }),
+      ])
+      onOpenChange(false)
+    },
     onError: fail,
   })
   const reset = useMutation({ mutationFn: api.reset, onSuccess: done, onError: fail })
