@@ -326,10 +326,11 @@ export default function DecisionExplorer({ onApprove }) {
                     {i === 0 && (
                       <div className="mt-5 flex flex-wrap items-center gap-2.5">
                         <Button size="lg" className="h-10"
+                                disabled={!o.requires_approval}
                                 onClick={() => onApprove?.(o)}>
                           {o.requires_approval
-                            ? `Approve ${o.total_cost ? inr(o.total_cost) : 'this plan'}`
-                            : 'Agent is already executing this'}
+                            ? `Review and approve ${o.total_cost ? inr(o.total_cost) : ''} \u2192`
+                            : 'Inside the agent\u2019s authority \u2014 already running'}
                         </Button>
                         <Button variant="ghost" size="sm"
                                 onClick={() => setShowMatrix((v) => !v)}

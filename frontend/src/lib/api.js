@@ -54,6 +54,8 @@ export const api = {
 
   // decisions
   approvals:   ()          => req('/api/approvals'),
+  decide:      (id, b)     => post(`/api/approvals/${id}/decide`, b),
+  accuracy:    ()          => req('/api/accuracy'),
   solve:       (po, rec, exclude = []) => req(
     `/api/solve/${po}?record=${rec ? 'true' : 'false'}` +
     (exclude.length ? `&exclude=${exclude.join(',')}` : '')),

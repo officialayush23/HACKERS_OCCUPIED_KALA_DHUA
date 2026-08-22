@@ -831,6 +831,54 @@ async def approvals():
     return {"approvals": [dict(r) for r in rows]}
 
 
+class ApproveBody(BaseModel):
+    decision: str = "approve"           # approve | reject
+    note: str | None = None
+    decided_by: str = "operator"
+
+
+@app.post("/api/approvals/{approval_id}/decide")
+async def decide_approval(approval_id: int, body: ApproveBody):
+    """Actually decide an approval, and resume the agent.
+
+    The Decision Explorer previously had an Approve button that only navigated to
+    the approvals screen. Pressing it looked like approving and changed nothing —
+    which is the worst possible behaviour for the one control that exists to stop
+    the agent spending money.
+    """
+    if body.decision not in ("approve", "reject"):
+        raise HTTPException(400, "decision must be 'approve' or 'reject'")
+
+    pool = await db()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "select * from approvals where id=$1", approval_id)
+        if row is None:
+            raise HTTPException(404, f"unknown approval {approval_id}")
+        if row["status"] != "pending":
+            raise HTTPException(409, f"approval {approval_id} is already {row['status']}")
+
+        await conn.execute(
+            "update approvals set status=$2, decided_at=now() where id=$1",
+            approval_id, "approved" if body.decision == "approve" else "rejected")
+
+        await emit(conn, incident_id=row["incident_id"], actor=body.decided_by,
+                   event_type="APPROVAL_DECIDED",
+                   human_summary=(f"{body.decided_by} {body.decision}d: {row['action']}"
+                                  + (f" \u2014 {body.note}" if body.note else "")),
+                   payload={"approval_id": approval_id, "decision": body.decision,
+                            "action": row["action"],
+                            "estimated_cost": float(row["estimated_cost"] or 0),
+                            "note": body.note, "decided_by": body.decided_by})
+
+        if row["incident_id"]:
+            await agent.resume(conn, row["incident_id"],
+                               decision=body.decision, note=body.note)
+
+    return {"ok": True, "approval_id": approval_id, "decision": body.decision,
+            "incident_id": row["incident_id"]}
+
+
 # ========================= BUSINESS CONTEXT ==================================
 
 
@@ -849,6 +897,128 @@ async def supplier_reliability(supplier_id: str):
             raise HTTPException(404, f"unknown supplier {supplier_id}")
         return {"supplier": dict(row),
                 "history": await learning.history(conn, supplier_id)}
+
+
+@app.get("/api/accuracy")
+async def accuracy():
+    """How often is the agent actually right?
+
+    Every number here is checkable against the audit log, and each one is a
+    *verified* outcome rather than a self-report:
+
+      constraint_compliance — recovery orders raised, versus how many of them
+        violated a hard rule. Any violation is a failure, however cheap.
+      claim_verification    — supplier claims that contradicted carrier tracking,
+        and how many the agent caught rather than believed.
+      delivery_accuracy     — did the stock the agent bought actually turn up
+        usable, in the quantity it planned for.
+      escalation_precision  — of the things it stopped and asked about, how many
+        genuinely crossed its authority. Stopping unnecessarily wastes a human;
+        not stopping is worse.
+      interpretation        — supplier replies read into structured facts, versus
+        replies it correctly refused to guess at.
+    """
+    pool = await db()
+    async with pool.acquire() as conn:
+        pos = await conn.fetch(
+            """select p.id, p.quantity, p.unit_price, p.component_id, p.supplier_id,
+                      p.mode::text as mode, p.status::text as status,
+                      c.required_certifications, c.is_hazmat,
+                      se.certifications, sc.min_order_quantity
+                 from purchase_orders p
+                 join components c on c.id = p.component_id
+                 left join supplier_effective se on se.supplier_id = p.supplier_id
+                 left join supplier_catalog sc on sc.supplier_id = p.supplier_id
+                                              and sc.component_id = p.component_id
+                where p.created_by_agent""")
+
+        violations = []
+        for p in pos:
+            need = set(p["required_certifications"] or [])
+            have = set(p["certifications"] or [])
+            if need - have:
+                violations.append({"po_id": p["id"], "rule": "REQUIRED_CERTIFICATION",
+                                   "detail": f"missing {', '.join(sorted(need - have))}"})
+            if p["min_order_quantity"] and p["quantity"] < p["min_order_quantity"]:
+                violations.append({"po_id": p["id"], "rule": "MIN_ORDER_QUANTITY",
+                                   "detail": f"ordered {p['quantity']}, "
+                                             f"minimum {p['min_order_quantity']}"})
+            if p["is_hazmat"] and (p["mode"] or "").upper() == "AIR":
+                violations.append({"po_id": p["id"], "rule": "HAZMAT_NO_AIR",
+                                   "detail": "hazmat routed by air"})
+
+        contradictions_real = await conn.fetchval(
+            """select count(*) from shipment_tracking t
+                where t.supplier_claim in ('dispatched','in_transit')
+                  and t.tracking_status in ('label_created_no_pickup','not_shipped')""") or 0
+        contradictions_caught = await conn.fetchval(
+            "select count(*) from audit_events where event_type='CLAIM_CONTRADICTED'") or 0
+
+        receipts = await conn.fetch(
+            """select g.quantity_received, g.quantity_approved, p.quantity as ordered
+                 from goods_receipts g
+                 join purchase_orders p on p.id = g.po_id
+                where p.created_by_agent""")
+
+        escalations = await conn.fetch(
+            """select a.estimated_cost, a.reason from approvals a""")
+        threshold = APPROVAL_THRESHOLD_INR
+        justified = sum(1 for a in escalations
+                        if float(a["estimated_cost"] or 0) > threshold
+                        or "elay" in (a["reason"] or ""))
+
+        interpreted = await conn.fetch(
+            """select technical_payload from audit_events
+                where event_type='MESSAGE_INTERPRETED'""")
+        parsed = refused = 0
+        for r in interpreted:
+            pl = r["technical_payload"]
+            pl = json.loads(pl) if isinstance(pl, str) else (pl or {})
+            if pl.get("needs_human"):
+                refused += 1
+            elif pl.get("quantity_mentioned") is not None or pl.get("claim") not in (None, "unclear"):
+                parsed += 1
+
+    def pct(n, d):
+        return None if not d else round(100.0 * n / d, 1)
+
+    delivered = sum(r["quantity_approved"] or 0 for r in receipts)
+    planned = sum(r["ordered"] or 0 for r in receipts)
+
+    return {
+        "constraint_compliance": {
+            "orders_raised": len(pos),
+            "violations": len(violations),
+            "detail": violations,
+            "score_pct": pct(len(pos) - len(violations), len(pos)),
+            "note": "A single violation is a failure. Cost never excuses one.",
+        },
+        "claim_verification": {
+            "contradictions_present": int(contradictions_real),
+            "caught": int(contradictions_caught),
+            "score_pct": pct(contradictions_caught, contradictions_real),
+            "note": "Supplier claims the carrier data disproves, and how many were caught.",
+        },
+        "delivery_accuracy": {
+            "units_planned": int(planned),
+            "units_usable_on_arrival": int(delivered),
+            "score_pct": pct(delivered, planned),
+            "note": "Ordering is not recovering. This counts what became usable stock.",
+        },
+        "escalation_precision": {
+            "escalations": len(escalations),
+            "genuinely_over_authority": int(justified),
+            "score_pct": pct(justified, len(escalations)),
+            "note": f"Over Rs {threshold:,} or delaying another customer. "
+                    f"Stopping needlessly wastes a human; not stopping is worse.",
+        },
+        "interpretation": {
+            "messages_read": parsed + refused,
+            "parsed_into_facts": parsed,
+            "refused_to_guess": refused,
+            "note": "Refusing to guess is a correct outcome, not a failure.",
+        },
+    }
 
 
 @app.get("/api/now")

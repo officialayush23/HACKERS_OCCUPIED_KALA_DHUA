@@ -6,6 +6,7 @@ import {
   Truck, Warehouse as WarehouseIcon, Wifi, WifiOff,
 } from 'lucide-react'
 import { api, WS_URL } from '@/lib/api'
+import { refresh } from '@/lib/refresh'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -278,7 +279,7 @@ export default function WarehousePortal({ warehouseId = 'Pune-Plant-1' }) {
     return () => { closed = true; ws?.close() }
   }, [qc])
 
-  const done = () => qc.invalidateQueries()
+  const done = () => refresh(qc, 'world')
   const complete = useMutation({
     mutationFn: ({ id, body }) => api.completeTask(id, body),
     onSuccess: (_r, v) => { setReceipt(v.receipt); done() },

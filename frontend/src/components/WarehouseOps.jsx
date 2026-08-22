@@ -6,6 +6,7 @@ import {
   Truck, Undo2,
 } from 'lucide-react'
 import { api } from '@/lib/api'
+import { refresh } from '@/lib/refresh'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -266,7 +267,7 @@ export default function WarehouseOps({ revision }) {
   const { data } = useQuery({
     queryKey: ['warehouse', revision], queryFn: api.warehouse, refetchInterval: 4000 })
 
-  const done = () => qc.invalidateQueries()
+  const done = () => refresh(qc, 'world')
 
   const complete = useMutation({
     mutationFn: ({ id, body }) => api.completeTask(id, body),

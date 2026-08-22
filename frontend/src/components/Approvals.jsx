@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'motion/react'
 import { AlertTriangle, Check, Loader2, PencilLine, X } from 'lucide-react'
 import { api } from '@/lib/api'
+import { refresh } from '@/lib/refresh'
 import { inr } from '@/lib/format'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -30,8 +31,10 @@ export default function Approvals({ revision }) {
     queryKey: ['approvals', revision], queryFn: api.approvals, refetchInterval: 3000 })
 
   const decide = useMutation({
-    mutationFn: ({ id, body }) => api.resume(id, body),
-    onSuccess: () => { setModifying(null); setExclude(''); setNote(''); qc.invalidateQueries() },
+    // Decide the approval row itself. The old call only resumed the agent and
+    // left the approval sitting on `pending`, so the screen never changed.
+    mutationFn: ({ id, body }) => api.decide(id, body),
+    onSuccess: () => { setModifying(null); setExclude(''); setNote(''); refresh(qc, 'decision') },
   })
 
   const list = data?.approvals ?? []
@@ -141,7 +144,7 @@ export default function Approvals({ revision }) {
                   ) : (
                     <div className="mt-5 flex gap-2">
                       <Button className="gap-1.5" disabled={decide.isPending}
-                        onClick={() => decide.mutate({ id: a.incident_id,
+                        onClick={() => decide.mutate({ id: a.id,
                                                        body: { decision: 'approve' } })}>
                         {decide.isPending ? <Loader2 className="size-3.5 animate-spin" />
                                           : <Check className="size-3.5" />}
@@ -152,7 +155,7 @@ export default function Approvals({ revision }) {
                         <PencilLine className="size-3.5" />Modify
                       </Button>
                       <Button variant="ghost" className="text-destructive gap-1.5"
-                        onClick={() => decide.mutate({ id: a.incident_id,
+                        onClick={() => decide.mutate({ id: a.id,
                                                        body: { decision: 'reject' } })}>
                         <X className="size-3.5" />Reject
                       </Button>

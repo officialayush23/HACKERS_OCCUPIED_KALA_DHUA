@@ -13,7 +13,7 @@ import asyncio
 import json
 from typing import Any
 
-from . import llm
+from . import llm, parsing
 from .core import CLOCK, broadcast_state, db, emit
 
 #: How a simulated counterparty behaves. Never revealed to the agent.
@@ -140,12 +140,34 @@ async def _supplier_reply(thread_id: int, supplier_id: str, name: str,
                 "where thread_id=$1 and direction='outbound'", thread_id)
             await conn.execute("update message_threads set status='open' where id=$1", thread_id)
 
-            interp, used_llm = await llm.interpret_supplier_message(
-                persona["script"], {"po_id": "", "component_name": ""})
-            await emit(conn, incident_id=incident_id, actor="llm",
+            # Deterministic extraction always runs and always produces a result.
+            # The model, when it is available, may sharpen a field the parser
+            # missed — it may not overrule a number read straight from the text.
+            raw, used_llm = await llm.interpret_supplier_message(
+                persona["script"], {"po_id": "", "component_name": name})
+            interp = parsing.interpret(persona["script"],
+                                       raw if used_llm else None).to_dict()
+
+            await emit(conn, incident_id=incident_id, actor="agent",
                        event_type="MESSAGE_INTERPRETED",
-                       human_summary=f"Read {name}'s reply: {interp.get('summary')}",
-                       payload={**interp, "supplier_id": supplier_id, "llm": used_llm})
+                       human_summary=f"Read {name}\u2019s reply \u2014 {interp['summary']}",
+                       payload={**interp, "supplier_id": supplier_id,
+                                "supplier_name": name, "llm": used_llm,
+                                "message": persona["script"]})
+
+            # An offer we cannot act on is a decision for a person, not a guess.
+            if interp["needs_human"]:
+                await emit(conn, incident_id=incident_id, actor="agent",
+                           event_type="HUMAN_INPUT_REQUIRED",
+                           human_summary=(f"{name}\u2019s reply needs a person: "
+                                          f"{interp['needs_human_reason']}"),
+                           payload={"supplier_id": supplier_id, "supplier_name": name,
+                                    "message": persona["script"],
+                                    "interpretation": interp,
+                                    "confidence": interp["confidence"],
+                                    "options": ["ask for confirmation",
+                                                "reply manually",
+                                                "use another supplier"]})
     except Exception:                              # noqa: BLE001
         pass
 

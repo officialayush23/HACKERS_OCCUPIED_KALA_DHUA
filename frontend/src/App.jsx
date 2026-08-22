@@ -15,6 +15,7 @@ import WorldState from '@/components/WorldState'
 import DecisionExplorer from '@/components/DecisionExplorer'
 import RunHistory from '@/components/RunHistory'
 import DecisionLog from '@/components/DecisionLog'
+import Accuracy from '@/components/Accuracy'
 import NowBar from '@/components/NowBar'
 import ActionQueue from '@/components/ActionQueue'
 import AgentStatus from '@/components/AgentStatus'
@@ -330,10 +331,12 @@ export default function App() {
 
             {page === 'scoring' && (
               <div className="grid h-full grid-cols-12">
-                <ScrollArea className="col-span-5 min-h-0 border-r">
+                <div className="col-span-7 min-h-0 border-r">
+                  <Accuracy revision={revision} />
+                </div>
+                <ScrollArea className="glass-panel col-span-5 min-h-0">
                   <RunHistory revision={revision} />
                 </ScrollArea>
-                <div className="col-span-7 min-h-0"><WorldState revision={revision} /></div>
               </div>
             )}
           </motion.div>

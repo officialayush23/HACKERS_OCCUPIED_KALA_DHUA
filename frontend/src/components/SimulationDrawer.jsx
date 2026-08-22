@@ -5,6 +5,7 @@ import {
   AlertTriangle, Check, FlaskConical, Loader2, Play, Plus, RotateCcw,
 } from 'lucide-react'
 import { api } from '@/lib/api'
+import { refresh } from '@/lib/refresh'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -125,7 +126,7 @@ export default function SimulationDrawer({ open, onOpenChange }) {
     queryKey: ['scenarios'], queryFn: api.scenarios,
     refetchInterval: open ? 2000 : false })
 
-  const done = () => { setError(null); qc.invalidateQueries() }
+  const done = () => { setError(null); refresh(qc, 'simulation') }
   const fail = (e) => setError(e.message)
 
   const run = useMutation({ mutationFn: api.inject, onSuccess: done, onError: fail })
@@ -167,7 +168,7 @@ export default function SimulationDrawer({ open, onOpenChange }) {
             <ScrollArea className="h-full">
               <div className="p-7">
                 <CustomTab eventTypes={data?.event_types}
-                           onDone={() => { qc.invalidateQueries(); onOpenChange(false) }} />
+                           onDone={() => { refresh(qc, 'simulation'); onOpenChange(false) }} />
               </div>
             </ScrollArea>
           </TabsContent>
