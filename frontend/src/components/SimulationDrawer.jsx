@@ -11,8 +11,9 @@ import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import {
-  Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
-} from '@/components/ui/sheet'
+  Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle,
+} from '@/components/ui/drawer'
+import ScenarioForm from '@/components/ScenarioForm'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
@@ -30,9 +31,12 @@ const EXAMPLE = `[
 ]`
 
 /** Write your own disruption. Same event types, same execution path. */
-function CustomTab({ eventTypes, onDone }) {
+function CustomTab({ onDone }) {
   const [name, setName] = useState('')
-  const [json, setJson] = useState(EXAMPLE)
+  const [tests, setTests] = useState('')
+  const [events, setEvents] = useState([
+    { at_h: 0, type: 'supplier_delay', params: { po_id: '', delay_days: 5 } },
+  ])
   const [error, setError] = useState(null)
 
   const add = useMutation({
@@ -41,54 +45,29 @@ function CustomTab({ eventTypes, onDone }) {
     onError: (e) => setError(e.message),
   })
 
-  const submit = () => {
-    let events
-    try {
-      events = JSON.parse(json)
-    } catch (e) {
-      return setError(`That is not valid JSON — ${e.message}`)
-    }
-    setError(null)
-    add.mutate({ name: name || 'Custom scenario', events, run: true })
-  }
+  const incomplete = events.some((e) =>
+    Object.values(e.params ?? {}).some((v) => v === '' || v === undefined || v === null))
 
   return (
-    <div className="flex flex-col gap-5">
-      <p className="text-muted-foreground text-[12.5px] leading-relaxed">
-        Write your own disruption and the agent will handle it live. It runs down the
-        same code path as the built-in scenarios — there is no separate mode. Custom
-        scenarios live in memory only and disappear when the server restarts.
-      </p>
-
-      <label className="flex flex-col gap-1.5">
-        <span className="text-muted-foreground text-[10px] font-medium
-                         tracking-[0.12em] uppercase">Name it</span>
-        <Input value={name} onChange={(e) => setName(e.target.value)}
-               placeholder="e.g. Two suppliers fail at once"
-               className="h-9 text-[13px]" />
-      </label>
-
-      <label className="flex flex-col gap-1.5">
-        <span className="text-muted-foreground text-[10px] font-medium
-                         tracking-[0.12em] uppercase">Events</span>
-        <Textarea value={json} onChange={(e) => setJson(e.target.value)}
-                  spellCheck={false} rows={14}
-                  className="font-mono text-[11.5px] leading-relaxed" />
-        <span className="text-muted-foreground text-[10.5px] leading-relaxed">
-          <b>at_h</b> is when it fires, in simulated hours from the start.
-          One real second is one simulated hour.
-        </span>
-      </label>
-
-      <div>
-        <div className="text-muted-foreground mb-2 text-[10px] font-medium
-                        tracking-[0.12em] uppercase">Event types you can use</div>
-        <div className="flex flex-wrap gap-1.5">
-          {(eventTypes ?? []).map((t) => (
-            <Badge key={t} variant="outline" className="font-mono text-[10px]">{t}</Badge>
-          ))}
-        </div>
+    <div className="flex flex-col gap-6">
+      <div className="grid grid-cols-2 gap-4">
+        <label className="flex flex-col gap-1.5">
+          <span className="text-muted-foreground text-[10px] font-medium
+                           tracking-[0.12em] uppercase">Name this test</span>
+          <Input value={name} onChange={(e) => setName(e.target.value)}
+                 placeholder="e.g. Two suppliers fail at once"
+                 className="h-9 text-[13px]" />
+        </label>
+        <label className="flex flex-col gap-1.5">
+          <span className="text-muted-foreground text-[10px] font-medium
+                           tracking-[0.12em] uppercase">What is it testing?</span>
+          <Input value={tests} onChange={(e) => setTests(e.target.value)}
+                 placeholder="e.g. Does it refuse the cheap uncertified source?"
+                 className="h-9 text-[13px]" />
+        </label>
       </div>
+
+      <ScenarioForm value={events} onChange={setEvents} />
 
       {error && (
         <div className="border-danger/40 bg-danger/[0.07] text-danger flex items-start gap-2
@@ -97,11 +76,22 @@ function CustomTab({ eventTypes, onDone }) {
         </div>
       )}
 
-      <Button size="lg" disabled={add.isPending} onClick={submit} className="h-10">
-        {add.isPending ? <Loader2 className="size-4 animate-spin" />
-                       : <Plus className="size-4" />}
-        Register and run
-      </Button>
+      <div className="flex items-center gap-3">
+        <Button size="lg" disabled={add.isPending || !events.length || incomplete}
+                onClick={() => add.mutate({
+                  name: name || 'Custom test', tests: tests || undefined,
+                  events, run: true })}
+                className="h-11">
+          {add.isPending ? <Loader2 className="size-4 animate-spin" />
+                         : <Plus className="size-4" />}
+          Register and run
+        </Button>
+        {incomplete && (
+          <span className="text-muted-foreground text-[11.5px]">
+            Every step needs all its fields filled in.
+          </span>
+        )}
+      </div>
     </div>
   )
 }
@@ -152,18 +142,19 @@ export default function SimulationDrawer({ open, onOpenChange }) {
   const selSpan  = selected?.span_sim_hours ?? 0
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 sm:max-w-[34rem]">
-        <SheetHeader className="gap-2 border-b px-7 py-6">
-          <SheetTitle className="flex items-center gap-2.5 text-[18px]">
+    <Drawer open={open} onOpenChange={onOpenChange}>
+      <DrawerContent className="flex max-h-[92vh] flex-col gap-0 p-0">
+       <div className="mx-auto flex w-full max-w-5xl min-h-0 flex-1 flex-col">
+        <DrawerHeader className="gap-2 border-b px-7 py-6">
+          <DrawerTitle className="flex items-center gap-2.5 text-[18px]">
             <FlaskConical className="text-primary size-4.5" />Run a simulation
-          </SheetTitle>
-          <SheetDescription className="text-[13px] leading-relaxed">
+          </DrawerTitle>
+          <DrawerDescription className="text-[13px] leading-relaxed">
             Each scenario feeds real events into the world on a simulated clock —
             one second of real time is one hour of plant time. The agent is never
             told which scenario is running, or what it is meant to conclude.
-          </SheetDescription>
-        </SheetHeader>
+          </DrawerDescription>
+        </DrawerHeader>
 
         <Tabs defaultValue="built-in" className="flex min-h-0 flex-1 flex-col gap-0">
           <TabsList className="mx-7 mt-5 w-auto self-start">
@@ -174,7 +165,7 @@ export default function SimulationDrawer({ open, onOpenChange }) {
           <TabsContent value="custom" className="min-h-0 flex-1">
             <ScrollArea className="h-full">
               <div className="p-7">
-                <CustomTab eventTypes={data?.event_types}
+                <CustomTab
                            onDone={() => { refresh(qc, 'simulation'); onOpenChange(false) }} />
               </div>
             </ScrollArea>
@@ -321,7 +312,8 @@ export default function SimulationDrawer({ open, onOpenChange }) {
           Reset re-seeds inventory, orders and shipments. The audit log and past run scores
           survive it, so you never lose the comparison you are tuning against.
         </p>
-      </SheetContent>
-    </Sheet>
+       </div>
+      </DrawerContent>
+    </Drawer>
   )
 }

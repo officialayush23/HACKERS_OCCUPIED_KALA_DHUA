@@ -1358,8 +1358,12 @@ async def now_state():
             """select t.id, t.counterparty_name, t.counterparty_type, t.subject
                  from message_threads t
                 where t.status = 'awaiting_reply' order by t.id desc limit 6""")
+        # Read from the audit log, not a parallel table. The event already carries
+        # the question, the confidence and the options; duplicating it into its
+        # own table would give the same fact two homes and one of them would rot.
         questions = await conn.fetch(
-            """select h.id, h.incident_id, h.kind, h.question, h.detail, h.confidence
+            """select h.id, h.incident_id, h.kind, h.question, h.detail,
+                      h.confidence, h.options
                  from human_input_requests h
                 where h.status = 'open' order by h.id desc limit 8""")
         drafts = await conn.fetch(
@@ -1449,6 +1453,8 @@ async def now_state():
                       "request_id": q["id"],
                       "title": q["question"], "detail": q["detail"],
                       "confidence": float(q["confidence"] or 0),
+                      "options": (json.loads(q["options"])
+                                  if isinstance(q["options"], str) else (q["options"] or [])),
                       "cta": "Answer"})
     for d in drafts:
         queue.append({"kind": "draft", "urgency": "high", "id": f"draft-{d['id']}",

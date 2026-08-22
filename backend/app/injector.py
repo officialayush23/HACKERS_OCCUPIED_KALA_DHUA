@@ -89,8 +89,8 @@ async def apply_event(conn, etype: str, params: dict[str, Any],
                        f"{days}-{days + 2} days. We are trying to resolve this."))
         await learning.record(
             conn, po["supplier_id"], "promise_made",
-            reason=f"Announced a {days}-day slip on {po['id']}.",
-            delay_days=days, detail={"po_id": po["id"], "delay_days": days})
+            reason=f"Announced a {days}-day slip on {po_id}.",
+            delay_days=days, detail={"po_id": po_id, "delay_days": days})
         iid = incident_id or await _ensure_incident(
             conn, itype="supplier_delay", component_id=po["component_id"],
             po_id=po_id, severity="high",
