@@ -36,7 +36,7 @@ from typing import Any
 
 from . import learning, llm, parsing
 from .comms import open_thread, post
-from .core import CLOCK, broadcast_state, emit
+from .core import CLOCK, broadcast_state, emit, run_context
 
 #: supplier_id -> monotonic timestamp of the last heartbeat from their portal.
 #: Deliberately in-process and deliberately not persisted: "is a human sitting
@@ -540,11 +540,12 @@ async def raise_human_input(conn, *, kind: str, question: str,
     rid = await conn.fetchval(
         """insert into human_input_requests
              (incident_id, thread_id, supplier_id, component_id, kind, question,
-              detail, context, options, confidence, simulated_at_seconds)
-           values ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11) returning id""",
+              detail, context, options, confidence, simulated_at_seconds,
+              scenario_run_id)
+           values ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12) returning id""",
         incident_id, thread_id, supplier_id, component_id, kind, question, detail,
         json.dumps(context or {}, default=str), json.dumps(options or [], default=str),
-        confidence, sim)
+        confidence, sim, (run_context() or {}).get("run_id"))
 
     await emit(conn, incident_id=incident_id, actor="agent",
                event_type="HUMAN_INPUT_REQUIRED",

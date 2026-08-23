@@ -3,7 +3,7 @@
 `TASKS.md` is the original build plan. **This file is the working state**: what is
 done, what is broken, what is next, and what we know about why.
 
-Last updated: 23 Aug 2026, 05:10.
+Last updated: 23 Aug 2026, 05:40.
 
 ---
 
@@ -85,10 +85,11 @@ being absent, or the socket itself. The socket was always working.
       deterministic cards and tables under each reply.
 
 ## 2. Open — blocking a clean demo
-- [ ] **`A recovery plan was produced` fails while the run passes 9/10.** The
-      S2 evaluation says no plan was produced, but the Decision Log shows one.
-      Either `recovery_plans.scenario_run_id` is not being stamped, or the plan
-      is written after `evaluate()` runs. Check the ordering in `injector._run`.
+- [x] **`A recovery plan was produced` false negative** — it was the stamp, as
+      suspected. `recovery_plans`, `approvals`, `warehouse_tasks` and
+      `human_input_requests` were all inserted without `scenario_run_id`, so
+      `evaluate()` counted zero of each. Same root cause as an approval existing
+      while the run-scoped `/api/approvals` returned empty. All four now stamp.
 - [ ] **Cover reads `-0.6 days`.** Negative cover should render as "already
       out" — a negative day count is arithmetic leaking into the UI.
 - [ ] **SUP-42/57/64 have no `supplier_catalog` rows**, so their portal Quote
@@ -113,6 +114,17 @@ being absent, or the socket itself. The socket was always working.
       `/` and `/health` routes.
 
 ### Command mode — still to add
+- [x] **Provider layer** (`backend/app/providers.py`) — Gemini / xAI / Bedrock
+      behind one shape. `LLM_PROVIDER=auto` picks whichever key is present,
+      preferring production, so local and deployed differ by which secret
+      exists, not which code path runs. `AWS_API_KEY_BEDROCK` is read as the xAI
+      credential by default; `LLM_PROVIDER=bedrock` routes the same variable to
+      the Bedrock driver instead.
+- [x] **`GET /api/llm/diagnose`** — tries every provider and reports what each
+      one actually did. A missing key, a revoked key, a dead model name and
+      blocked egress all read as "deterministic only" and have four different
+      fixes.
+
 - [ ] More verbs: "what if the shipment slips two more days" (simulate without
       committing), "prioritise the Mumbai plant", "contact every supplier
       except X", "how much to eliminate the risk entirely".

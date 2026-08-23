@@ -358,12 +358,14 @@ async def agent_request_warehouse(conn, *, incident_id: str, component_id: str,
     task_id = await conn.fetchval(
         """insert into warehouse_tasks
              (facility_id, component_id, incident_id, task_type, priority,
-              requested_by, instructions)
-           values ('Pune-Plant-1',$1,$2,$3,'urgent','agent',$4) returning id""",
+              requested_by, instructions, scenario_run_id)
+           values ('Pune-Plant-1',$1,$2,$3,'urgent','agent',$4,$5) returning id""",
         component_id, incident_id, task_type,
         f"Confirm physically usable stock of {name}. ERP shows "
         f"{context.get('erp_stock')} units. Production may stop in "
-        f"{context.get('coverage_days')} days.")
+        f"{context.get('coverage_days', '?')} days.",
+        # Stamp the run: a task raised during a wiped run is not a task.
+        (run_context() or {}).get("run_id"))
 
     thread_id = await open_thread(
         conn, incident_id=incident_id, counterparty_type="warehouse",

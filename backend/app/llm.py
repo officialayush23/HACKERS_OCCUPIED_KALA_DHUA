@@ -19,9 +19,8 @@ from typing import Any
 
 import httpx
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip()
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+from . import providers
+
 TIMEOUT_S = float(os.getenv("LLM_TIMEOUT_S", "20"))
 
 #: Set false to force deterministic mode (useful when demoing offline).
@@ -29,92 +28,127 @@ LLM_ENABLED = os.getenv("LLM_ENABLED", "true").lower() not in ("false", "0", "no
 
 _stats = {"calls": 0, "fallbacks": 0, "total_ms": 0.0, "last_error": None}
 
-# A wrong model name fails exactly like a wrong key, an expired key and a
-# firewall: the badge says "deterministic" and nothing says why. Model names
-# also move — one that existed when this was written may not exist on demo day,
-# and "the AI silently stopped being used" is the worst possible way to find
-# that out. So: try the configured name first, fall back through known-good
-# ones, and remember whichever answered.
-_MODEL_CANDIDATES = [
-    GEMINI_MODEL,
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-    "gemini-1.5-flash-latest",
-    "gemini-1.5-pro",
-]
-_active_model: str | None = None
+# Which vendor, and which of its model names actually answered. A wrong model
+# name fails exactly like a wrong key, an expired key and a firewall: the badge
+# says "deterministic" and nothing says why. So we try the configured name
+# first, fall back through known-good ones, and remember whichever worked —
+# per provider, because the answer differs between them.
+_active: dict[str, str | None] = {"provider": None, "model": None}
 
 
 def stats() -> dict[str, Any]:
+    driver, why = providers.resolve()
     return {
         **_stats,
-        "enabled": LLM_ENABLED and bool(GEMINI_API_KEY),
-        "model": _active_model or GEMINI_MODEL,
-        "configured_model": GEMINI_MODEL,
-        "model_resolved": _active_model is not None,
+        "enabled": LLM_ENABLED and driver is not None,
+        "provider": _active["provider"] or (driver.name if driver else None),
+        "model": _active["model"] or (
+            next((m for m in driver.models if m), None) if driver else None),
+        "model_resolved": _active["model"] is not None,
+        "why_unavailable": why,
         "avg_ms": round(_stats["total_ms"] / _stats["calls"], 1) if _stats["calls"] else 0,
     }
 
 
 async def _call(prompt: str, *, system: str | None = None,
                 json_mode: bool = False, max_tokens: int = 700) -> str | None:
-    """Raw call. Returns None on any failure — callers must handle that."""
-    if not (LLM_ENABLED and GEMINI_API_KEY):
+    """Raw call, vendor-agnostic. Returns None on any failure — callers handle it.
+
+    The retry walks *model names within one provider*, not across providers. A
+    400/404 means "not that model" and is worth another name; a 401 or a 429 is
+    about the key or the service, and trying four more names against the same
+    dead credential just turns one clear error into four confusing ones.
+    """
+    if not LLM_ENABLED:
+        return None
+    driver, why = providers.resolve()
+    if driver is None:
+        _stats["last_error"] = why
         return None
 
-    body: dict[str, Any] = {
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.2, "maxOutputTokens": max_tokens},
-    }
-    if system:
-        body["systemInstruction"] = {"parts": [{"text": system}]}
-    if json_mode:
-        body["generationConfig"]["responseMimeType"] = "application/json"
-
-    global _active_model
-    # Once one model has answered, stop shopping around.
-    candidates = ([_active_model] if _active_model
-                  else list(dict.fromkeys(m for m in _MODEL_CANDIDATES if m)))
+    # Once a model has answered for this provider, stop shopping around.
+    if _active["provider"] == driver.name and _active["model"]:
+        candidates = [_active["model"]]
+    else:
+        candidates = list(dict.fromkeys(m for m in driver.models if m))
 
     started = time.perf_counter()
     last: str | None = None
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT_S) as client:
             for model in candidates:
-                r = await client.post(
-                    GEMINI_URL.format(model=model),
-                    headers={"x-goog-api-key": GEMINI_API_KEY,
-                             "Content-Type": "application/json"},
-                    json=body,
-                )
-                if r.status_code == 200:
-                    _active_model = model
-                    elapsed = (time.perf_counter() - started) * 1000
-                    _stats["calls"] += 1
-                    _stats["total_ms"] += elapsed
-                    _stats["last_error"] = None
-                    data = r.json()
-                    parts = (data.get("candidates", [{}])[0]
-                                 .get("content", {}).get("parts", []))
-                    text = "".join(p.get("text", "") for p in parts).strip()
-                    return text or None
+                url, headers, body = driver.build(
+                    model, prompt=prompt, system=system,
+                    json_mode=json_mode, max_tokens=max_tokens)
+                r = await client.post(url, headers=headers, json=body)
 
-                last = f"{model} -> HTTP {r.status_code}: {r.text[:120]}"
-                # 404/400 means "not this model"; anything else (401, 429, 500)
-                # is about the key or the service and trying another name is
-                # just noise.
+                if r.status_code == 200:
+                    _active["provider"], _active["model"] = driver.name, model
+                    _stats["calls"] += 1
+                    _stats["total_ms"] += (time.perf_counter() - started) * 1000
+                    _stats["last_error"] = None
+                    try:
+                        return driver.extract(r.json())
+                    except Exception as exc:            # noqa: BLE001
+                        _stats["last_error"] = (
+                            f"{driver.name}/{model} answered 200 but the body did not "
+                            f"parse: {type(exc).__name__}")
+                        return None
+
+                last = f"{driver.name}/{model} -> HTTP {r.status_code}: {r.text[:140]}"
                 if r.status_code not in (400, 404):
                     break
 
         _stats["calls"] += 1
         _stats["fallbacks"] += 1
-        _stats["last_error"] = last or "no model answered"
+        _stats["last_error"] = last or f"{driver.name}: no model answered"
         return None
     except Exception as exc:                      # noqa: BLE001 - never break the demo
         _stats["calls"] += 1
         _stats["fallbacks"] += 1
-        _stats["last_error"] = f"{type(exc).__name__}: {exc}"[:200]
+        _stats["last_error"] = f"{driver.name}: {type(exc).__name__}: {exc}"[:220]
         return None
+
+
+async def diagnose() -> dict[str, Any]:
+    """Try every configured provider and say exactly what each one did.
+
+    Exists because "the model is unavailable" is not a diagnosis. A missing key,
+    a revoked key, a model name that no longer exists and a blocked egress all
+    produce that same sentence, and the four fixes are completely different.
+    This turns a guess into one HTTP call you can read.
+    """
+    out = {"enabled": LLM_ENABLED, "selected": None, "providers": []}
+    driver, why = providers.resolve()
+    out["selected"] = driver.name if driver else None
+    out["why_unavailable"] = why
+
+    for info in providers.inventory():
+        d = providers.ALL[info["provider"]]
+        entry = {**info, "ok": False, "model": None, "error": None}
+        if not LLM_ENABLED:
+            entry["error"] = "LLM_ENABLED is false"
+        elif not d.key:
+            entry["error"] = f"no key — {providers._keyhint(d.name)}"
+        else:
+            for model in [m for m in d.models if m]:
+                try:
+                    url, headers, body = d.build(
+                        model, prompt="Reply with the single word: OK",
+                        system=None, json_mode=False, max_tokens=10)
+                    async with httpx.AsyncClient(timeout=TIMEOUT_S) as client:
+                        r = await client.post(url, headers=headers, json=body)
+                    if r.status_code == 200:
+                        entry["ok"], entry["model"] = True, model
+                        break
+                    entry["error"] = f"{model}: HTTP {r.status_code} {r.text[:140]}"
+                    if r.status_code not in (400, 404):
+                        break
+                except Exception as exc:          # noqa: BLE001
+                    entry["error"] = f"{model}: {type(exc).__name__}: {exc}"[:200]
+                    break
+        out["providers"].append(entry)
+    return out
 
 
 async def _json_call(prompt: str, *, system: str, fallback: dict) -> tuple[dict, bool]:
@@ -287,8 +321,9 @@ async def health() -> dict[str, Any]:
     if not LLM_ENABLED:
         return {"ok": False, "reason": "LLM_ENABLED is false in the environment",
                 **stats()}
-    if not GEMINI_API_KEY:
-        return {"ok": False, "reason": "GEMINI_API_KEY is not set", **stats()}
+    driver, why = providers.resolve()
+    if driver is None:
+        return {"ok": False, "reason": why, **stats()}
     t = await _call("Reply with the single word: OK", max_tokens=10)
     if t:
         return {"ok": True, "sample": t, **stats()}

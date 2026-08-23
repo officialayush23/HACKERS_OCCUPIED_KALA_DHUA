@@ -446,14 +446,19 @@ async def _plan_and_validate(conn, incident_id: str) -> None:
     plan_id = await conn.fetchval(
         """insert into recovery_plans
              (incident_id,status,option_kind,label,total_cost,score,rationale,
-              requires_approval,payload)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb) returning id""",
+              requires_approval,payload,scenario_run_id)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10) returning id""",
         incident_id,
         "awaiting_approval" if chosen["requires_approval"] else "approved",
         chosen["kind"], chosen["label"], chosen["total_cost"], chosen["score"],
         narrative, chosen["requires_approval"],
         json.dumps({"chosen": chosen, "options": result["options"],
-                    "rejections": result["rejections"]}, default=str))
+                    "rejections": result["rejections"]}, default=str),
+        # Stamp the run. Without this the plan exists, the Decision Log shows it,
+        # and `evaluate()` — which counts per run — reports "no recovery plan was
+        # produced" against a run that produced one. Two screens, same table,
+        # opposite answers.
+        st.get("run_id") or (run_context() or {}).get("run_id"))
 
     st["plan_id"] = plan_id
     st["result"] = result
@@ -493,9 +498,11 @@ async def _plan_and_validate(conn, incident_id: str) -> None:
                        f"is over my spending authority.")
 
         await conn.execute(
-            """insert into approvals (incident_id, action, estimated_cost, reason, brief, status)
-               values ($1,$2,$3,$4,$5,'pending')""",
-            incident_id, chosen["label"], chosen["total_cost"], reason, narrative)
+            """insert into approvals (incident_id, action, estimated_cost, reason,
+                                      brief, status, scenario_run_id)
+               values ($1,$2,$3,$4,$5,'pending',$6)""",
+            incident_id, chosen["label"], chosen["total_cost"], reason, narrative,
+            st.get("run_id") or (run_context() or {}).get("run_id"))
         await _step(conn, incident_id, blocked_line, status="blocked")
         await emit(conn, incident_id=incident_id, actor="agent",
                    event_type="APPROVAL_REQUIRED", human_summary=waiting,

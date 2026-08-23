@@ -1110,6 +1110,17 @@ async def llm_health():
     return await llm.health()
 
 
+@app.get("/api/llm/diagnose")
+async def llm_diagnose():
+    """Why is the model unavailable? Try every provider and say what each did.
+
+    "Deterministic only" is a symptom shared by a missing key, a revoked key, a
+    model name that no longer exists and blocked egress — and the four fixes are
+    entirely different. This answers which one it is.
+    """
+    return await llm.diagnose()
+
+
 # ============================ COMMS ==========================================
 
 
