@@ -648,3 +648,85 @@ that will not send procurement data to an API. That is a deployment question, no
 one. `llm.py` is the only place a model is called and `providers.py` is the only place a
 vendor's HTTP lives, so pointing it at a local endpoint is a driver, not a rewrite, and nothing
 about the decisions would move.
+
+---
+
+## Running test cases — quick reference
+
+The full explanation of what each scenario tests and how the schema works is above, under
+["Testing it — start here"](#testing-it--start-here). This is the copy-paste version — for
+when you already know what you want to run and just need the command.
+
+### Run a built-in scenario (S1–S8)
+
+**UI:** top bar → **Run simulation** → **Built-in** tab → pick one → **Run**.
+
+**API:**
+
+```bash
+# list them, with what each one tests
+curl localhost:8000/api/scenarios
+
+# run one
+curl -X POST localhost:8000/api/scenarios/S1-normal-disruption/inject
+```
+
+Any id from the table in ["The eight built-in scenarios"](#the-eight-built-in-scenarios) works
+in place of `S1-normal-disruption`. The clock only advances while something is running, so
+watch the Overview page or `GET /api/now` — an incident should open within a few simulated
+hours with nobody pressing anything else.
+
+### Write and run a custom test case
+
+**UI:** top bar → **Run simulation** → **Write your own** tab → name it, say what it tests,
+**Add a step** for each event (dropdowns narrow to what actually exists — you cannot name a
+part or shipment that isn't real) → **Show it as JSON** if you want to check or copy the exact
+payload → **Register and run**.
+
+**API** — validate first if you want the error before you commit to a run, then register:
+
+```bash
+# optional: check it will be accepted, without creating or running anything
+curl -X POST localhost:8000/api/scenarios/validate \
+  -H 'Content-Type: application/json' \
+  -d '{ "name": "Cheap supplier, no certification",
+        "events": [{ "at_h": 0, "type": "supplier_delay",
+                      "params": { "po_id": "PO-7712", "delay_days": 6 } }] }'
+
+# register and run in one call
+curl -X POST localhost:8000/api/scenarios/custom \
+  -H 'Content-Type: application/json' \
+  -d '{ "name": "Cheap supplier, no certification",
+        "tests": "Whether price ever outweighs a missing AEC-Q100",
+        "events": [{ "at_h": 0, "type": "supplier_delay",
+                      "params": { "po_id": "PO-7712", "delay_days": 6 } }] }'
+```
+
+Add `"run": false` to register without injecting — useful if you want to queue several and
+fire them one at a time. The full event-type reference (all twelve types, their fields, and a
+longer worked example) is under
+["Writing your own test case — the schema"](#writing-your-own-test-case--the-schema).
+Custom scenarios are in-memory only and disappear on restart; `DELETE
+/api/scenarios/custom/<id>` removes one early.
+
+### Clearing state between runs
+
+Two different resets, and the difference matters for judging:
+
+| Button | Endpoint | What survives |
+|---|---|---|
+| **Reset world** | `POST /api/scenarios/reset?mode=demo` | Past runs, scores and the audit log — everything you're tuning against |
+| **Wipe everything** | `POST /api/system/hard-reset` | Only the static baseline: suppliers, components, plants, policies. No runs, incidents, decisions, messages, tasks, approvals, evaluations or scores |
+
+Use **Reset world** between individual test cases in the same session — it re-seeds inventory,
+orders, shipments, conversations and tasks but keeps your run history so you can compare. Use
+**Wipe everything** before a fresh demo or a graded run, so nothing from an earlier test can be
+mistaken for evidence about this one. Both ask for confirmation before running.
+
+```bash
+curl -X POST "localhost:8000/api/scenarios/reset?mode=demo"   # between test cases
+curl -X POST localhost:8000/api/system/hard-reset              # before a clean run
+```
+
+After either, refresh the browser tab (or trust the WebSocket — it clears the local cache on a
+`world_reset` message automatically) before starting the next test case.
