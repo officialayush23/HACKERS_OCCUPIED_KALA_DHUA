@@ -511,6 +511,19 @@ async def _plan_and_validate(conn, incident_id: str) -> None:
     await execute(conn, incident_id)
 
 
+async def plan_now(conn, incident_id: str) -> dict | None:
+    """Run the planning leg synchronously and hand back what it decided.
+
+    Command mode needs an answer, not a promise: "I have started thinking about
+    it" is not a reply to "buy me 500 units". This is the same
+    `_plan_and_validate` the autonomous loop runs — same solver, same hard
+    filters, same authority gate, same audit events — awaited rather than
+    spawned, so the response can describe what actually happened.
+    """
+    await _plan_and_validate(conn, incident_id)
+    return (_STATE.get(incident_id) or {}).get("result")
+
+
 async def execute(conn, incident_id: str) -> None:
     """EXECUTE → VERIFY. Creates the PO, then keeps ownership until stock is real."""
     st = _STATE.get(incident_id, {})

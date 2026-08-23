@@ -5,7 +5,7 @@ import {
   AlertTriangle, ArrowRight, Building2, CheckCircle2, Factory, Loader2, Ban,
   Send, ShieldCheck, Truck, Wifi, WifiOff,
 } from 'lucide-react'
-import { api, WS_URL } from '@/lib/api'
+import { api, apiUrl, WS_URL } from '@/lib/api'
 import { inr } from '@/lib/format'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -398,8 +398,7 @@ export default function SupplierPortal({ supplierId }) {
     beat()
     const t = setInterval(beat, 15000)
     const bye = () => { navigator.sendBeacon?.(
-      `${import.meta.env.VITE_API_BASE ?? 'http://localhost:8000'}` +
-      `/api/supplier/${supplierId}/presence?leaving=true`) }
+      apiUrl(`/api/supplier/${supplierId}/presence?leaving=true`)) }
     window.addEventListener('pagehide', bye)
     return () => {
       alive = false

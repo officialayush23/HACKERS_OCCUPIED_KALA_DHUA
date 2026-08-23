@@ -3,7 +3,7 @@
 `TASKS.md` is the original build plan. **This file is the working state**: what is
 done, what is broken, what is next, and what we know about why.
 
-Last updated: 23 Aug 2026, 04:30.
+Last updated: 23 Aug 2026, 05:10.
 
 ---
 
@@ -98,6 +98,29 @@ being absent, or the socket itself. The socket was always working.
       should floor at the seeded prior, not zero.
 
 ## 3. Open — asked for, not started
+
+- [x] **Command mode** — `POST /api/agent/command` (`backend/app/command.py`).
+      Human instructions enter the *same* loop an alert would: same solver, same
+      hard filters, same ₹1,50,000 authority gate. One response contract —
+      `status` / `plan` / `blockers` / `alternatives` / `actions_taken` — so a
+      refusal always names the rule and offers what it *can* do. Verbs: source,
+      exclude-and-replan, cancel. Questions are refused as commands on purpose.
+- [x] **Chat acts, not just answers.** An imperative routes to `/command`, a
+      question to `/ask`. Chat renders the plan, blockers, alternatives and what
+      actually changed.
+- [x] **Deploy fixes** — trailing-slash normalisation in `lib/api.js` (the
+      `OPTIONS //api/... 400` storm), `ALLOWED_ORIGINS` env var for CORS,
+      `/` and `/health` routes.
+
+### Command mode — still to add
+- [ ] More verbs: "what if the shipment slips two more days" (simulate without
+      committing), "prioritise the Mumbai plant", "contact every supplier
+      except X", "how much to eliminate the risk entirely".
+- [ ] Alternatives should be *clickable* — `[Choose A]` executing that option
+      directly rather than sending you to another screen.
+- [ ] `llm.classify_intent` does not exist yet; `command.run` guards for it with
+      `hasattr`, so an unparsed instruction currently falls through to
+      clarification instead of asking the model to name the verb.
 
 - [ ] **Chatbot.** A real conversation with the agent, not one-shot Q&A: message
       history, follow-ups, and the deterministic `blocks` (cards/tables) already

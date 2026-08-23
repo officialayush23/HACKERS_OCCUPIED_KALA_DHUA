@@ -1,8 +1,23 @@
-const BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000'
+/**
+ * One place that knows where the backend is, and exactly one slash.
+ *
+ * A base URL pasted from a hosting dashboard almost always carries a trailing
+ * slash, and `${BASE}/api/x` then produces `//api/x`. Most servers tolerate it;
+ * a CORS preflight does not, and the failure surfaces as `OPTIONS //api/... 400`
+ * — which reads like a routing bug rather than a stray character. Normalise it
+ * once here rather than trusting every call site and every deploy config.
+ */
+export const BASE = (
+  import.meta.env.VITE_API_BASE ?? import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+).replace(/\/+$/, '')
+
+/** Join without ever doubling or dropping the separator. */
+export const apiUrl = (path) => `${BASE}/${String(path).replace(/^\/+/, '')}`
+
 export const WS_URL = BASE.replace(/^http/, 'ws') + '/ws'
 
 async function req(path, opts = {}) {
-  const res = await fetch(BASE + path, {
+  const res = await fetch(apiUrl(path), {
     headers: { 'Content-Type': 'application/json' }, ...opts,
   })
   if (!res.ok) {
@@ -45,6 +60,9 @@ export const api = {
   resume:      (id, b)     => post(`/api/agent/resume/${id}`, b),
   verify:      (id)        => post(`/api/agent/verify/${id}`),
   ask:         (q, id)     => post('/api/agent/ask', { question: q, incident_id: id }),
+  // Acts. `ask` only reads — see backend/app/command.py for why they are
+  // two doors into one agent rather than two agents.
+  command:     (instruction) => post('/api/agent/command', { instruction }),
   llmHealth:   ()          => req('/api/llm/health'),
 
   // comms

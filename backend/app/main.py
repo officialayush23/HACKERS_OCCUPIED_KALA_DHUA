@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import pathlib
 from typing import Any
 
@@ -23,20 +24,45 @@ from .scenarios import (EVENT_SCHEMA, EVENT_TYPES, REF_TABLES, SCENARIOS,
                         unregister_custom, validate_custom)
 from .solver import solve_for_production_order
 from .scorer import score_run
-from . import (agent, comms, evaluation, intelligence, learning, llm,
+from . import (agent, command, comms, evaluation, intelligence, learning, llm,
                supplier_portal, worldbuild)
 from .risk import assess as assess_risk
 
 SEED_PATH = pathlib.Path(__file__).resolve().parents[2] / "supabase" / "seed.sql"
 
 app = FastAPI(title="Supply Chain Disruption Control Agent", version="0.1.0")
+# Deployed, the frontend is no longer on localhost, and a CORS rule that only
+# knows about localhost turns every preflight into a 400 that reads like a
+# routing bug. ALLOWED_ORIGINS is a comma-separated list for the deployed
+# frontends; localhost stays matched by regex so nobody has to configure
+# anything to run this on their own machine.
+_EXTRA_ORIGINS = [o.strip().rstrip("/")
+                  for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
+    allow_origins=_EXTRA_ORIGINS,
     # Any localhost port: 5173 is `vite dev`, 4173 is `vite preview`, and
-    # teammates run on whatever port is free. This is a local dev tool.
+    # teammates run on whatever port is free.
     allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
     allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
+
+
+@app.get("/")
+async def root():
+    """Something truthful at the root.
+
+    Render, uptime checks and anyone who pastes the base URL into a browser all
+    hit `/`. A 404 there says "this is broken" about a service that is fine.
+    """
+    return {"service": "DisruptionOps API", "status": "ok",
+            "docs": "/docs", "health": "/api/health", "websocket": "/ws"}
+
+
+@app.get("/health")
+async def plain_health():
+    return {"status": "healthy"}
 
 
 @app.on_event("shutdown")
@@ -1052,6 +1078,31 @@ async def agent_ask(body: AskBody):
                  f"{len(state['recent_rejections'])} recorded refusals",
                  f"{len(state['inventory'])} components in stock"]
     return {"answer": answer, "llm": used_llm, "grounding": grounding, "blocks": blocks}
+
+
+class CommandBody(BaseModel):
+    instruction: str
+    actor: str = "operator"
+
+
+@app.post("/api/agent/command")
+async def agent_command(body: CommandBody):
+    """Tell the agent what to do.
+
+    The second entry point into the one agent — `/api/agent/ask` reads and never
+    writes, this acts. Every reply has the same shape (status, plan, blockers,
+    alternatives, actions_taken) so the UI never has to guess whether anything
+    happened. See command.py for why there is deliberately no second agent
+    behind this.
+    """
+    if not (body.instruction or "").strip():
+        raise HTTPException(400, "instruction is required")
+    pool = await db()
+    async with pool.acquire() as conn:
+        try:
+            return await command.run(conn, body.instruction, actor=body.actor)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
 
 
 @app.get("/api/llm/health")
