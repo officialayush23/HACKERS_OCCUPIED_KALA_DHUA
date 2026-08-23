@@ -23,13 +23,17 @@ production key runs on that, with no config change between them. That is the
 whole point: local testing and production differ by which secret is present,
 not by which code path runs.
 
-A note on `AWS_API_KEY_BEDROCK`
-------------------------------
-That is the variable name the production key arrives in. It is read as the xAI
-credential by default, because xAI is what production uses. If it turns out to
-be a genuine Bedrock bearer token, set `LLM_PROVIDER=bedrock` and the same
-variable routes to the Bedrock driver instead — no code change, and no second
-place to put the secret.
+Production is Bedrock
+---------------------
+`AWS_API_KEY_BEDROCK` / `AWS_BEARER_TOKEN_BEDROCK` holds an AWS Bedrock
+long-term API key — the `ABSK…` bearer-token form, not SigV4 credentials and not
+an xAI key. It is read only by the Bedrock driver. Sending that token to
+`api.x.ai` would fail with a 401 that looks like a bad key rather than a
+misrouted one, which is exactly the kind of confusion this file exists to
+prevent: one credential, one driver, no guessing.
+
+xAI stays wired and selectable (`XAI_API_KEY`, or `LLM_PROVIDER=xai`) so
+swapping to it later is a secret, not a rewrite.
 
 Nothing here decides anything. Every driver returns text; the solver decides.
 """
@@ -51,9 +55,11 @@ def _env(*names: str) -> str:
 # ------------------------------------------------------------------ keys ----
 
 GEMINI_API_KEY = _env("GEMINI_API_KEY", "GOOGLE_API_KEY")
-# Production key. `AWS_API_KEY_BEDROCK` is where the hackathon credential lands.
-XAI_API_KEY = _env("XAI_API_KEY", "GROK_API_KEY", "AWS_API_KEY_BEDROCK")
-BEDROCK_API_KEY = _env("AWS_API_KEY_BEDROCK", "AWS_BEARER_TOKEN_BEDROCK")
+XAI_API_KEY = _env("XAI_API_KEY", "GROK_API_KEY")
+# Production. Both names are in circulation: AWS documents
+# AWS_BEARER_TOKEN_BEDROCK, and the credential file ships it as
+# AWS_API_KEY_BEDROCK. Accept either rather than making anyone rename a secret.
+BEDROCK_API_KEY = _env("AWS_BEARER_TOKEN_BEDROCK", "AWS_API_KEY_BEDROCK")
 BEDROCK_REGION = _env("AWS_REGION", "AWS_DEFAULT_REGION") or "us-east-1"
 
 # Model names move. Each list is "what was configured, then known-good ones" —
@@ -65,9 +71,17 @@ GEMINI_MODELS = [
 XAI_MODELS = [
     _env("XAI_MODEL"), "grok-4-fast-non-reasoning", "grok-3-mini", "grok-2-latest",
 ]
+# Bedrock is fussy here in a way the others are not: the newer Claude models are
+# only reachable through a cross-region *inference profile* (`us.` prefix) and
+# return a 400 telling you so if you use the bare model id, while the older ones
+# only exist under the bare id. Listing both forms means the first call finds
+# whichever this account actually has, instead of a 400 that reads like a broken
+# key.
 BEDROCK_MODELS = [
     _env("BEDROCK_MODEL"),
-    "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    "us.anthropic.claude-3-5-haiku-20241022-v1:0",
+    "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+    "anthropic.claude-3-5-sonnet-20240620-v1:0",
     "anthropic.claude-3-haiku-20240307-v1:0",
 ]
 
@@ -179,21 +193,23 @@ def resolve():
     if want != "auto":
         return None, f"LLM_PROVIDER={want!r} is not one of: auto, {', '.join(ALL)}"
 
-    # Production first, so a deploy carrying both keys uses the one it is meant
-    # to. Local machines usually only have the Gemini key and land there.
-    for d in (XAI, Bedrock, Gemini):
+    # Production first, so a machine carrying both keys uses the one it is meant
+    # to. A laptop with only GEMINI_API_KEY falls through to Gemini, which is
+    # what local testing wants.
+    for d in (Bedrock, XAI, Gemini):
         if d.key:
             return d, None
 
-    return None, ("No model key is set. Provide one of GEMINI_API_KEY (local testing) "
-                  "or AWS_API_KEY_BEDROCK / XAI_API_KEY (production).")
+    return None, ("No model key is set. Provide GEMINI_API_KEY for local testing, "
+                  "or AWS_BEARER_TOKEN_BEDROCK / AWS_API_KEY_BEDROCK for production.")
 
 
 def _keyhint(name: str) -> str:
     return {
         "gemini": "Set GEMINI_API_KEY.",
-        "xai": "Set XAI_API_KEY or AWS_API_KEY_BEDROCK.",
-        "bedrock": "Set AWS_API_KEY_BEDROCK (and AWS_REGION if not us-east-1).",
+        "xai": "Set XAI_API_KEY.",
+        "bedrock": "Set AWS_BEARER_TOKEN_BEDROCK or AWS_API_KEY_BEDROCK "
+                   "(and AWS_REGION if not us-east-1).",
     }.get(name, "")
 
 
@@ -210,8 +226,8 @@ def inventory() -> list[dict]:
 def _source_of(name: str) -> str | None:
     pairs = {
         "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
-        "xai": ("XAI_API_KEY", "GROK_API_KEY", "AWS_API_KEY_BEDROCK"),
-        "bedrock": ("AWS_API_KEY_BEDROCK", "AWS_BEARER_TOKEN_BEDROCK"),
+        "xai": ("XAI_API_KEY", "GROK_API_KEY"),
+        "bedrock": ("AWS_BEARER_TOKEN_BEDROCK", "AWS_API_KEY_BEDROCK"),
     }[name]
     for v in pairs:
         if (os.getenv(v) or "").strip():

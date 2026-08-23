@@ -3,7 +3,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { AnimatePresence, motion } from 'motion/react'
 import {
-  ArrowUp, Ban, Bot, CheckCircle2, HelpCircle, Loader2, ShieldAlert, Sparkles, User,
+  ArrowUp, Ban, Bot, CheckCircle2, CornerDownRight, HelpCircle, Loader2, ShieldAlert,
+  Sparkles, User,
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
@@ -67,7 +68,7 @@ const STATE_MARK = { done: '✓', blocked: '✕' }
  * into prose is how "I cannot source the components" happens, which tells you
  * nothing you can act on.
  */
-function CommandResult({ r }) {
+function CommandResult({ r, onChoose, choosing }) {
   const meta = STATUS[r.status] ?? STATUS.needs_clarification
   const { Icon } = meta
 
@@ -158,6 +159,20 @@ function CommandResult({ r }) {
                   <p className="text-muted-foreground mt-1 text-[11.5px] leading-relaxed">
                     {a.why_not_chosen}
                   </p>
+                )}
+                {/* Offering an option you cannot press is a list, not a choice.
+                    Choosing reorders the solver's ranking — it does not bypass
+                    it, so this button can never commit something the agent
+                    would have refused on its own. */}
+                {onChoose && a.label && (
+                  <Button size="sm" variant="outline" disabled={choosing}
+                          onClick={() => onChoose(a.label)}
+                          className="mt-2.5 h-8 text-[12px] font-normal">
+                    {choosing ? <Loader2 className="size-3.5 animate-spin" />
+                              : <CornerDownRight className="size-3.5" />}
+                    {a.requires_approval ? 'Choose this — it will need approval'
+                                         : 'Do this instead'}
+                  </Button>
                 )}
               </div>
             ))}
@@ -281,7 +296,7 @@ function Blocks({ blocks }) {
   )
 }
 
-function Turn({ turn }) {
+function Turn({ turn, onChoose, choosing }) {
   const mine = turn.role === 'you'
   return (
     <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
@@ -307,7 +322,8 @@ function Turn({ turn }) {
                 {turn.mode === 'do' ? 'working on it…' : 'reading the current state…'}
               </div>
             ) : turn.command ? (
-              <CommandResult r={turn.command} />
+              <CommandResult r={turn.command} choosing={choosing}
+                             onChoose={(label) => onChoose(turn.command, label)} />
             ) : (
               <>
                 <p className="text-[13.5px] leading-relaxed">{turn.text}</p>
@@ -380,7 +396,27 @@ export default function Chat({ incidentId }) {
                              text: `I could not carry that out — ${e.message}` }),
   })
 
-  const busy = ask.isPending || act.isPending
+  const pick = useMutation({
+    mutationFn: ({ label, incidentId }) => api.chooseOption(label, incidentId),
+    meta: { silent: true },
+    onSuccess: (r) => {
+      setTurns((t) => [...t, { id: `${t.length}-agent`, role: 'agent', command: r }])
+      qc.invalidateQueries({ predicate: (x) => x.queryKey?.[0] !== 'llm',
+                             refetchType: 'all' })
+      if (r.status === 'completed') toast.success(r.summary)
+      else if (r.status === 'needs_approval') toast.warning(r.summary)
+      else toast.error(r.summary)
+    },
+    onError: (e) => toast.error(String(e.message)),
+  })
+
+  const chooseOption = (cmd, label) => {
+    setTurns((t) => [...t, { id: `${t.length}-you`, role: 'you',
+                             text: `Do this instead: ${label}`, mode: 'do' }])
+    pick.mutate({ label, incidentId: cmd.incident_id })
+  }
+
+  const busy = ask.isPending || act.isPending || pick.isPending
 
   const send = (text, forceMode) => {
     const input = (text ?? q).trim()
@@ -446,7 +482,10 @@ export default function Chat({ incidentId }) {
             </div>
           ) : (
             <AnimatePresence initial={false}>
-              {turns.map((t) => <Turn key={t.id} turn={t} />)}
+              {turns.map((t) => (
+                <Turn key={t.id} turn={t} choosing={pick.isPending}
+                      onChoose={chooseOption} />
+              ))}
             </AnimatePresence>
           )}
           <div ref={endRef} />

@@ -110,6 +110,29 @@ async def _call(prompt: str, *, system: str | None = None,
         return None
 
 
+async def classify_intent(text: str) -> tuple[str | None, bool]:
+    """Name the verb in an instruction the regexes did not recognise.
+
+    This is the only thing the model is trusted with on the command path, and
+    deliberately so: it picks one of four words, and every consequence of that
+    word is then computed deterministically. A model that is unreachable costs
+    you phrasing flexibility, not correctness — `command.run` simply falls
+    through to asking the human what they meant.
+    """
+    raw = await _call(
+        f"Classify this operations instruction as exactly one word.\n\n"
+        f"source  = they want stock bought, ordered or covered\n"
+        f"exclude = they want a supplier avoided or banned\n"
+        f"cancel  = they want a purchase order withdrawn\n"
+        f"explain = they are asking a question, not giving an order\n\n"
+        f"Instruction: {text!r}\n\nReply with one word and nothing else.",
+        max_tokens=6)
+    if not raw:
+        return None, False
+    word = raw.strip().split()[0].strip(".,'\"").lower()
+    return (word if word in ("source", "exclude", "cancel", "explain") else None), True
+
+
 async def diagnose() -> dict[str, Any]:
     """Try every configured provider and say exactly what each one did.
 

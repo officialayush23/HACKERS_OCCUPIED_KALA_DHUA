@@ -450,16 +450,28 @@ because of what the graded problem actually is.
 
 The rubric is 70% decision quality: continuity 35%, cost 20%, supplier risk 15%. Those are
 arithmetic over live state, and the hidden tests are constraint traps — a missing
-certification, a minimum order quantity, a hazmat lane. **A fine-tuned model would be
-*more* likely to fail those**, because it learns the shape of a plausible answer rather than
-checking a rule. Ours cannot violate a constraint, because the constraint is a filter and not a
-prompt.
+certification, a minimum order quantity, a hazmat lane.
 
-Fine-tuning would help if the hard part were understanding messy supplier language at volume.
-It is a real problem, and it is roughly 10% of these marks. We spend a Gemini call on it and
-fall back to keyword rules when the model is unavailable.
+The precise claim, because the loose version of it is wrong:
+
+> **Fine-tuning does not provide a guarantee of constraint compliance. A deterministic
+> constraint filter does.**
+
+A fine-tuned model can get very good at these traps. What it cannot do is *promise* it will
+never take the uncertified supplier, because it is learning the shape of a plausible answer
+rather than evaluating a rule — and "very reliable" and "cannot happen" are different
+properties. Our solver cannot violate a constraint, because the constraint runs as a filter
+before anything is scored. No price and no lead time can outweigh it, since it never reaches
+the weighting at all. That is the property we are claiming, and it is checkable: every refusal
+is in the audit log with the rule that caused it.
+
+Fine-tuning would help where the hard part is reading messy supplier language at volume. That
+is a real problem and roughly 10% of these marks. We spend a model call on it, validate the
+result against a deterministic parse, and fall back to the parse alone when the model is
+unavailable — the numbers on screen never come from the model in either case.
 
 The genuine argument for a local model is **offline operation and data residency** — a plant
 that will not send procurement data to an API. That is a deployment question, not a capability
-one, and it is a swap of one file: `llm.py` is the only place a model is called. Pointing it at
-a local Ollama endpoint is a config change, and nothing about the decisions would move.
+one. `llm.py` is the only place a model is called and `providers.py` is the only place a
+vendor's HTTP lives, so pointing it at a local endpoint is a driver, not a rewrite, and nothing
+about the decisions would move.

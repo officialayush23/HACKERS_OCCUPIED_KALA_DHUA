@@ -379,8 +379,15 @@ async def _communicate(conn, incident_id: str) -> None:
                     f"({', '.join(a['supplier_id'] for a in alts)}).")
 
 
-async def _plan_and_validate(conn, incident_id: str) -> None:
-    """PLAN (deterministic) → VALIDATE → policy gate → execute or escalate."""
+async def _plan_and_validate(conn, incident_id: str, *, prefer_label: str | None = None) -> None:
+    """PLAN (deterministic) → VALIDATE → policy gate → execute or escalate.
+
+    `prefer_label` lets a human pick one of the options the solver already
+    scored. It reorders, it does not bypass: the choice still goes through the
+    same rejections, the same authority gate and the same execute path, so
+    choosing an alternative cannot do something the agent would have refused to
+    do on its own.
+    """
     st = _STATE[incident_id]
     await _set_status(conn, incident_id, "planning")
 
@@ -416,6 +423,19 @@ async def _plan_and_validate(conn, incident_id: str) -> None:
                        f"or lead time can compensate for it."),
                    payload={"supplier_id": rej["supplier_id"],
                             "constraint": rej["constraint"], **rej.get("detail", {})})
+
+    if prefer_label:
+        picked = next((o for o in result.get("options", [])
+                       if o.get("label") == prefer_label), None)
+        if picked:
+            result["chosen"] = picked
+            await _step(conn, incident_id,
+                        f"A human chose {prefer_label} over my ranking. It still has to "
+                        f"pass every hard constraint and the authority limit.")
+        else:
+            await _step(conn, incident_id,
+                        f"{prefer_label} is no longer on the table — the world moved. "
+                        f"Using my own ranking instead.", status="warning")
 
     chosen = result.get("chosen")
     if not chosen:
@@ -518,7 +538,8 @@ async def _plan_and_validate(conn, incident_id: str) -> None:
     await execute(conn, incident_id)
 
 
-async def plan_now(conn, incident_id: str) -> dict | None:
+async def plan_now(conn, incident_id: str, *,
+                   prefer_label: str | None = None) -> dict | None:
     """Run the planning leg synchronously and hand back what it decided.
 
     Command mode needs an answer, not a promise: "I have started thinking about
@@ -527,7 +548,7 @@ async def plan_now(conn, incident_id: str) -> dict | None:
     filters, same authority gate, same audit events — awaited rather than
     spawned, so the response can describe what actually happened.
     """
-    await _plan_and_validate(conn, incident_id)
+    await _plan_and_validate(conn, incident_id, prefer_label=prefer_label)
     return (_STATE.get(incident_id) or {}).get("result")
 
 

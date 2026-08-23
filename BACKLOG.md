@@ -3,7 +3,7 @@
 `TASKS.md` is the original build plan. **This file is the working state**: what is
 done, what is broken, what is next, and what we know about why.
 
-Last updated: 23 Aug 2026, 05:40.
+Last updated: 23 Aug 2026, 06:05.
 
 ---
 
@@ -90,13 +90,13 @@ being absent, or the socket itself. The socket was always working.
       `human_input_requests` were all inserted without `scenario_run_id`, so
       `evaluate()` counted zero of each. Same root cause as an approval existing
       while the run-scoped `/api/approvals` returned empty. All four now stamp.
-- [ ] **Cover reads `-0.6 days`.** Negative cover should render as "already
-      out" — a negative day count is arithmetic leaking into the UI.
-- [ ] **SUP-42/57/64 have no `supplier_catalog` rows**, so their portal Quote
-      tab is empty and the only way to answer is freeform. Either seed catalog
-      entries for the alternates or make the Quote form work off a blank slate.
-- [ ] **Trust shows 0.00 for suppliers with no history.** Laplace smoothing
-      should floor at the seeded prior, not zero.
+- [x] **Cover reads `-0.6 days`** — below zero the line has already stopped, so
+      the strip says "Out of stock now" and "have -50 usable" reads as "nothing
+      left · over-committed by 50".
+- [~] **SUP-42/57/64 empty catalogue / trust 0.00** — not reproducible. Checked
+      against the live DB: all three have catalogue rows, and every supplier has
+      a real prior (SUP-42 = 0.81). Both screenshots were taken while the DB was
+      mid-reset. Nothing changed; re-open if it recurs after a clean run.
 
 ## 3. Open — asked for, not started
 
@@ -125,23 +125,20 @@ being absent, or the socket itself. The socket was always working.
       blocked egress all read as "deterministic only" and have four different
       fixes.
 
+- [x] **Alternatives are clickable** — `POST /api/agent/command {choose}` routes
+      to `agent.plan_now(prefer_label=...)`, which *reorders* the solver's
+      ranking rather than bypassing it. The chosen option still passes every
+      hard constraint and the same authority gate, so a button here can never
+      commit something the agent would have refused on its own.
+- [x] **`llm.classify_intent`** — names the verb when the regexes miss. It picks
+      one of four words; every consequence is still computed deterministically.
 - [ ] More verbs: "what if the shipment slips two more days" (simulate without
       committing), "prioritise the Mumbai plant", "contact every supplier
       except X", "how much to eliminate the risk entirely".
-- [ ] Alternatives should be *clickable* — `[Choose A]` executing that option
-      directly rather than sending you to another screen.
-- [ ] `llm.classify_intent` does not exist yet; `command.run` guards for it with
-      `hasattr`, so an unparsed instruction currently falls through to
-      clarification instead of asking the model to name the verb.
 
-- [ ] **Chatbot.** A real conversation with the agent, not one-shot Q&A: message
-      history, follow-ups, and the deterministic `blocks` (cards/tables) already
-      returned by `/api/agent/ask` rendered per turn. Should live as a panel, not
-      only inside the command bar.
-- [ ] **Decisions page scoped to the run.** The production-order picker lists
-      every order in the world with no indication which belong to this run or
-      which suppliers the scenario actually seeded. This is the single most
-      confusing screen for a judge.
+- [x] **Decisions page scoped to the run** — the picker sorts the runs this test
+      actually touched to the top, marks them "this run", and defaults to one of
+      them instead of whichever seeded row happened to sort first.
 - [ ] **Communications tabs** — `Needs reply / AI conversations / Warehouse`,
       with per-thread autonomy control (autonomous / draft-only / hands off).
       The backend (`comms.set_autonomy`) and the column both exist; no UI.
@@ -149,18 +146,24 @@ being absent, or the socket itself. The socket was always working.
       open, so the eye goes to the affected path.
 - [ ] **Simulation transport controls** — play / pause / speed / scrub over the
       simulated clock.
-- [ ] **README + SUBMISSION wording on fine-tuning.** Current text overclaims.
-      Correct framing: *"Fine-tuning does not provide a guarantee of constraint
-      compliance. A deterministic constraint filter does."*
+- [x] **README wording on fine-tuning** — corrected to the defensible claim:
+      *"Fine-tuning does not provide a guarantee of constraint compliance. A
+      deterministic constraint filter does."* A tuned model can be very good at
+      the traps; it cannot promise. SUBMISSION.md never mentioned it.
 
 ## 4. Hygiene before submission
 
 - [ ] Rotate every credential in `API KEYS/APIKEYS.txt` — Supabase DB password,
       Gemini key, Mapbox token, Redis keys. They are gitignored but they are
       also in this repo's history of your machine.
-- [ ] Confirm SMTP stays unwired. The problem statement mandates a simulated
-      sandbox; connecting a real mail account would fail the brief.
-- [ ] Re-run `get_advisors` on Supabase after the `0008` migration.
+- [x] SMTP confirmed unwired — no `smtplib`, no `aiosmtplib`, no reference to
+      `SMTP_HOST` anywhere in `backend/app/`. The variables sit unused in `.env`.
+      Every "message" is a `thread_messages` row. The problem statement mandates
+      a simulated sandbox and this stays inside it.
+- [x] Supabase advisors re-run after `0008` — clean. The only findings are
+      INFO-level "RLS enabled, no policy", which is the *safe* posture here:
+      RLS on with no policy denies anon and authenticated outright, and the
+      backend connects as the service role. No ERROR, no WARN.
 - [ ] `python backend/smoke.py` green before every demo.
 
 ---

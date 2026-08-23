@@ -415,18 +415,63 @@ async def _do_cancel(conn, parsed: dict) -> dict[str, Any]:
         understood=parsed)
 
 
+async def _do_choose(conn, incident_id: str, label: str) -> dict[str, Any]:
+    """Take one of the alternatives the agent just offered.
+
+    Reordering, not overriding. The chosen option still passes through every
+    hard constraint and the same authority gate, so pressing a button here can
+    never commit something the agent would have refused to do by itself — which
+    is the property that makes offering alternatives safe in the first place.
+    """
+    if not incident_id:
+        return _response("needs_clarification",
+                         "I have lost track of which decision that belongs to.",
+                         human_action_required="Ask again and pick from the fresh answer.")
+
+    result = await agent.plan_now(conn, incident_id, prefer_label=label)
+    chosen = (result or {}).get("chosen")
+
+    if not chosen:
+        return _response(
+            "blocked", f"“{label}” is no longer available — the position moved since "
+                       f"I offered it.",
+            blockers=_blockers_from(result or {}),
+            alternatives=_alternatives_from(result or {}),
+            incident_id=incident_id)
+
+    if chosen.get("requires_approval"):
+        return _response(
+            "needs_approval",
+            f"{chosen['label']} at ₹{float(chosen['total_cost']):,.0f} is past my "
+            f"₹{APPROVAL_THRESHOLD_INR:,} limit, so choosing it does not place it.",
+            human_action_required="Approve it on the Approvals screen.",
+            alternatives=_alternatives_from(result), incident_id=incident_id)
+
+    return _response(
+        "completed",
+        f"Done — {chosen['label']} for ₹{float(chosen['total_cost']):,.0f}.",
+        actions_taken=[{"action": "purchase_order_created", "label": chosen["label"],
+                        "cost": float(chosen["total_cost"]),
+                        "units_covered": chosen.get("units_covered")}],
+        incident_id=incident_id)
+
+
 # -------------------------------------------------------------- entrypoint --
 
 
-async def run(conn, instruction: str, *, actor: str = "operator") -> dict[str, Any]:
+async def run(conn, instruction: str, *, actor: str = "operator",
+              choose: str | None = None,
+              incident_id: str | None = None) -> dict[str, Any]:
     """The single door for human instructions."""
+    if choose:
+        return await _do_choose(conn, incident_id, choose)
+
     parsed = parse(instruction)
 
     # Only when the deterministic pass finds no verb at all is the model asked,
     # and only to name the verb. Every consequence is still computed here.
     if parsed["verb"] is None:
-        guess, _ = await llm.classify_intent(instruction) if hasattr(
-            llm, "classify_intent") else (None, False)
+        guess, _ = await llm.classify_intent(instruction)
         if guess in ("source", "exclude", "cancel", "explain"):
             parsed["verb"] = guess
 

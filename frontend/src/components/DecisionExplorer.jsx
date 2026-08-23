@@ -98,19 +98,37 @@ function Row({ label, hint, cells, chosenIndex, className = '' }) {
 
 export default function DecisionExplorer({ onApprove }) {
   const { data: ctx } = useQuery({ queryKey: ['context'], queryFn: api.context })
-  const orders = ctx?.production ?? []
+  const { data: now } = useQuery({ queryKey: ['now'], queryFn: api.now })
+
+  // Which runs this test actually touched. The picker used to list every
+  // production order in the world in seed order, with nothing to say which ones
+  // the scenario was about — so the first thing anyone did on this screen was
+  // wonder whether they were looking at the right row. At-risk first, and each
+  // one says why it is there.
+  const inRun = useMemo(
+    () => new Set((now?.at_risk ?? []).map((r) => r.id)), [now])
+
+  const orders = useMemo(() => {
+    const all = ctx?.production ?? []
+    return [...all].sort((a, b) => {
+      const ar = inRun.has(a.id), br = inRun.has(b.id)
+      if (ar !== br) return ar ? -1 : 1
+      return (b.shortfall ?? 0) - (a.shortfall ?? 0)
+    })
+  }, [ctx, inRun])
 
   const [poId, setPoId] = useState(null)
   const [failed, setFailed] = useState([])     // suppliers the what-if has killed
   const [showRejects, setShowRejects] = useState(true)
   const [showMatrix, setShowMatrix] = useState(false)
 
-  // Default to the order in the most trouble, not the first one alphabetically.
+  // Default to a run this test is actually about, and only then to the one in
+  // the most trouble. Landing on an untouched run makes the whole screen look
+  // like it is describing something else — which it is.
   useEffect(() => {
     if (poId || !orders.length) return
-    const worst = [...orders].sort((a, b) => (b.shortfall ?? 0) - (a.shortfall ?? 0))[0]
-    setPoId(worst?.id ?? orders[0].id)
-  }, [orders, poId])
+    setPoId(orders.find((o) => inRun.has(o.id))?.id ?? orders[0].id)
+  }, [orders, poId, inRun])
 
   useEffect(() => { setFailed([]) }, [poId])
 
@@ -154,10 +172,16 @@ export default function DecisionExplorer({ onApprove }) {
           <SelectContent>
             {orders.map((o) => (
               <SelectItem key={o.id} value={o.id} className="text-[12px]">
-                {o.product_name ?? o.id}
+                {inRun.has(o.id) && <span className="text-primary">● </span>}
+                <span className={inRun.has(o.id) ? '' : 'text-muted-foreground'}>
+                  {o.product_name ?? o.id}
+                </span>
                 <span className="text-muted-foreground"> · {o.oem_customer}</span>
                 {o.shortfall > 0 && (
                   <span className="text-danger"> · {o.shortfall} short</span>
+                )}
+                {inRun.has(o.id) && (
+                  <span className="text-primary text-[10px]"> · this run</span>
                 )}
               </SelectItem>
             ))}

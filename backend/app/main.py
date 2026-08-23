@@ -1081,8 +1081,11 @@ async def agent_ask(body: AskBody):
 
 
 class CommandBody(BaseModel):
-    instruction: str
+    instruction: str = ""
     actor: str = "operator"
+    # Pressing one of the alternatives the last answer offered.
+    choose: str | None = None
+    incident_id: str | None = None
 
 
 @app.post("/api/agent/command")
@@ -1095,12 +1098,13 @@ async def agent_command(body: CommandBody):
     happened. See command.py for why there is deliberately no second agent
     behind this.
     """
-    if not (body.instruction or "").strip():
+    if not (body.instruction or "").strip() and not body.choose:
         raise HTTPException(400, "instruction is required")
     pool = await db()
     async with pool.acquire() as conn:
         try:
-            return await command.run(conn, body.instruction, actor=body.actor)
+            return await command.run(conn, body.instruction, actor=body.actor,
+                                     choose=body.choose, incident_id=body.incident_id)
         except ValueError as e:
             raise HTTPException(400, str(e))
 

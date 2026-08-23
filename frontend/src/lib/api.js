@@ -63,6 +63,8 @@ export const api = {
   // Acts. `ask` only reads — see backend/app/command.py for why they are
   // two doors into one agent rather than two agents.
   command:     (instruction) => post('/api/agent/command', { instruction }),
+  chooseOption: (choose, incidentId) =>
+                 post('/api/agent/command', { choose, incident_id: incidentId }),
   llmHealth:   ()          => req('/api/llm/health'),
 
   // comms
