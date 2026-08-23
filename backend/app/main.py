@@ -999,14 +999,35 @@ async def agent_ask(body: AskBody):
     """Conversational agent. Reads deterministic state; never mutates it."""
     pool = await db()
     async with pool.acquire() as conn:
+        # Scoped to the active run, like every other read. Unscoped, this was the
+        # last place that could answer "0 open incidents" while the table beside
+        # it listed a plan from the run that was open — the assistant
+        # contradicting the screen it is sitting on.
+        run_id = await _active_run_id(conn)
         inc = await conn.fetch(
-            """select i.id, i.title, i.severity::text, i.status::text, i.narrative,
+            """select i.id, i.title, i.severity::text as severity,
+                      i.status::text as status, i.narrative,
                       c.display_name as component
                  from incidents i left join components c on c.id=i.component_id
-                where i.status not in ('resolved','failed') limit 5""")
+                where i.status not in ('resolved','failed')
+                  and ($1::bigint is null or i.scenario_run_id = $1)
+                limit 5""", run_id)
         plans = await conn.fetch(
-            """select incident_id, label, total_cost, status, rationale
-                 from recovery_plans order by id desc limit 5""")
+            """select incident_id, label, total_cost, status::text as status, rationale
+                 from recovery_plans
+                where ($1::bigint is null or scenario_run_id = $1)
+                order by id desc limit 5""", run_id)
+        # What is actually blocked on a human. Without these the assistant could
+        # not answer the most common question there is — "what needs me?" — and
+        # fell back to describing inventory.
+        approvals_pending = await conn.fetch(
+            """select id, action, estimated_cost from approvals
+                where status='pending'
+                  and ($1::bigint is null or scenario_run_id = $1)""", run_id)
+        questions_open = await conn.fetch(
+            """select id, question, confidence from human_input_requests
+                where status='open'
+                  and ($1::bigint is null or scenario_run_id = $1)""", run_id)
         floor = await _reset_floor(conn)
         rejects = await conn.fetch(
             """select human_summary, technical_payload from audit_events
@@ -1018,7 +1039,9 @@ async def agent_ask(body: AskBody):
     state = {"open_incidents": [dict(r) for r in inc],
              "recent_plans": [dict(r) for r in plans],
              "recent_rejections": [r["human_summary"] for r in rejects],
-             "inventory": [dict(r) for r in inv]}
+             "inventory": [dict(r) for r in inv],
+             "approvals_pending": [dict(r) for r in approvals_pending],
+             "questions_open": [dict(r) for r in questions_open]}
     answer, used_llm = await llm.answer_question(body.question, state)
 
     # The numbers are built here, deterministically, and rendered as cards and
@@ -1027,6 +1050,17 @@ async def agent_ask(body: AskBody):
     # which is the half of the answer that matters. And a table of numbers the
     # model never touched cannot contain a number the model invented.
     blocks: list[dict[str, Any]] = []
+
+    if approvals_pending or questions_open:
+        blocks.append({
+            "kind": "facts",
+            "title": "Waiting on you",
+            "items": [{"label": "approval", "value": a["action"],
+                       "sub": f'₹{float(a["estimated_cost"] or 0):,.0f}'}
+                      for a in approvals_pending]
+                     + [{"label": "question", "value": q["question"],
+                         "sub": "the agent refused to guess"} for q in questions_open],
+        })
 
     if inc:
         blocks.append({
@@ -1076,6 +1110,8 @@ async def agent_ask(body: AskBody):
     grounding = [f"{len(state['open_incidents'])} open incidents",
                  f"{len(state['recent_plans'])} recovery plans",
                  f"{len(state['recent_rejections'])} recorded refusals",
+                 f"{len(state['approvals_pending'])} awaiting approval",
+                 f"{len(state['questions_open'])} unanswered questions",
                  f"{len(state['inventory'])} components in stock"]
     return {"answer": answer, "llm": used_llm, "grounding": grounding, "blocks": blocks}
 

@@ -348,11 +348,95 @@ async def draft_supplier_message(kind: str, context: dict) -> tuple[str, bool]:
     return (text, True) if text else (fallback, False)
 
 
+def deterministic_answer(question: str, state: dict) -> str:
+    """Answer from state, with no model at all.
+
+    The old fallback was one canned sentence for every question, which meant the
+    single most common demo condition — model unreachable — produced an answer
+    that was true but useless, sitting on top of tables that had the real answer
+    in them. If the figures are good enough to render, they are good enough to
+    answer with.
+
+    Routing is keyword-based and deliberately shallow. It is not trying to be a
+    model; it is trying to make sure the honest answer is never worse than the
+    data already on screen.
+    """
+    q = (question or "").lower()
+    inc = state.get("open_incidents") or []
+    plans = state.get("recent_plans") or []
+    rej = state.get("recent_rejections") or []
+    inv = state.get("inventory") or []
+    q_pending = state.get("questions_open") or []
+    approvals = state.get("approvals_pending") or []
+
+    tight = sorted((r for r in inv if (r.get("daily_usage") or 0) > 0),
+                   key=lambda r: r["usable_stock"] / r["daily_usage"])
+
+    def cover(r):
+        return r["usable_stock"] / r["daily_usage"]
+
+    # "what needs me" / "action points" — the question people actually ask.
+    if any(k in q for k in ("action", "need me", "needs me", "do now", "should i",
+                            "waiting on me", "my plate", "priorit")):
+        bits = []
+        if approvals:
+            bits.append(f"{len(approvals)} decision(s) are past the agent's authority and "
+                        f"are waiting for you to approve or reject")
+        if q_pending:
+            bits.append(f"{len(q_pending)} question(s) the agent refused to guess at")
+        if not bits:
+            bits.append("nothing is blocked on you right now")
+        if tight and cover(tight[0]) < 5:
+            bits.append(f"{tight[0]['display_name']} is the tightest at "
+                        f"{cover(tight[0]):.1f} days of cover")
+        return ". ".join(b[0].upper() + b[1:] for b in bits) + "."
+
+    if any(k in q for k in ("refus", "reject", "why not", "ruled out", "excluded")):
+        if not rej:
+            return "Nothing has been refused in this run — no option hit a hard constraint."
+        return ("Refused so far: " + "; ".join(rej[:4]) +
+                ". Each is a hard filter — the option never reached scoring, so no price "
+                "would have changed it.")
+
+    if any(k in q for k in ("tight", "cover", "stock", "short", "run out", "inventory")):
+        if not tight:
+            return "No component has a usage rate on file, so cover cannot be computed."
+        top = tight[:3]
+        return ("Tightest cover: " + ", ".join(
+            f"{r['display_name']} at {cover(r):.1f} days" for r in top) +
+            ". Where the ERP and the floor disagree the agent plans against the counted "
+            "figure, not the ERP one.")
+
+    if any(k in q for k in ("plan", "option", "recommend", "chosen", "doing about")):
+        if not plans:
+            return "No recovery plan has been produced in this run yet."
+        p0 = plans[0]
+        return (f"The current plan is {p0.get('label')} at "
+                f"₹{float(p0.get('total_cost') or 0):,.0f}, status {p0.get('status')}. "
+                f"It was scored against continuity, cost and supplier risk by the solver.")
+
+    if any(k in q for k in ("incident", "risk", "wrong", "happening", "at risk")):
+        if not inc:
+            return ("No incident is open in this run. The agent opens one by itself the "
+                    "moment coverage falls inside the threshold.")
+        i0 = inc[0]
+        return (f"{len(inc)} incident open. {i0.get('title') or i0.get('id')} — "
+                f"{i0.get('severity')}, currently {str(i0.get('status','')).replace('_',' ')}.")
+
+    # No route matched. Say what is known rather than apologising.
+    parts = [f"{len(inc)} open incident(s)", f"{len(plans)} recovery plan(s)",
+             f"{len(rej)} recorded refusal(s)"]
+    if tight:
+        parts.append(f"tightest cover {cover(tight[0]):.1f} days on "
+                     f"{tight[0]['display_name']}")
+    return ("I do not have a model available to interpret that phrasing, so here is the "
+            "position it would have been answering from: " + ", ".join(parts) +
+            ". The tables below are the same figures.")
+
+
 async def answer_question(question: str, state: dict) -> tuple[str, bool]:
     """Conversational agent. Reads state; never mutates it."""
-    fallback = ("I can only answer from the current incident state, and the model is "
-                "unavailable right now. Open the Decision Explorer for the full "
-                "chosen-versus-rejected breakdown.")
+    fallback = deterministic_answer(question, state)
     prompt = (
         "Current operational state:\n"
         f"{json.dumps(state, indent=2, default=str)[:4000]}\n\n"

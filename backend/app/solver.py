@@ -415,6 +415,49 @@ select o.id, o.oem_customer, o.priority::text as priority, o.allocated_units,
 """
 
 
+async def solve_for_quantity(conn, production_order_id: str, quantity: int, *,
+                             exclude: list[str] | None = None) -> dict[str, Any]:
+    """Score an explicit quantity rather than the computed shortfall.
+
+    "Buy ten more" is a different question from "recover this run". The second
+    is arithmetic the agent does for you; the first is a number you chose, and
+    silently replacing it with our own shortfall would be the system deciding it
+    knows better without saying so.
+
+    Everything else is identical — the same candidate pool, the same hard
+    filters, the same weights — because the only thing that legitimately changes
+    is how many units we are pricing.
+    """
+    need = await conn.fetchrow(NEED_SQL, production_order_id)
+    if need is None:
+        raise ValueError(f"unknown production order {production_order_id}")
+
+    rows = await conn.fetch(CANDIDATE_SQL, need["component_id"], need["warehouse_id"])
+    if exclude:
+        rows = [r for r in rows if r["supplier_id"] not in set(exclude)]
+    spent = float(await conn.fetchval(
+        "select coalesce(sum(total_value),0) from purchase_orders "
+        "where created_by_agent") or 0)
+
+    result = solve(
+        candidates=[dict(r) for r in rows],
+        shortfall=int(quantity),
+        deadline=need["deadline"],
+        required_certs=list(need["required_certifications"] or []),
+        is_hazmat=need["is_hazmat"],
+        priority=need["priority"],
+        baseline_unit_price=float(need["baseline_unit_price"]),
+        budget_spent=spent,
+        # A top-up does not justify delaying somebody else's run.
+        reschedulable=[],
+    )
+    result["requested_quantity"] = int(quantity)
+    result["context"] = {"production_order_id": production_order_id,
+                         "component_id": need["component_id"],
+                         "requested_quantity": int(quantity)}
+    return result
+
+
 async def solve_for_production_order(
     conn, production_order_id: str, *, exclude: list[str] | None = None,
 ) -> dict[str, Any]:

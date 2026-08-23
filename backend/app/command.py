@@ -219,6 +219,40 @@ def _alternatives_from(result: dict) -> list[dict]:
     return alts
 
 
+async def _place(conn, order: dict, pick: dict, incident_id: str | None,
+                 parsed: dict) -> list[str]:
+    """Write the purchase orders for a chosen option.
+
+    Same columns and same `created_by_agent` flag as the autonomous path, so a
+    top-up is indistinguishable from a recovery in the ledger — which is
+    correct, because it is one.
+    """
+    from .core import CLOCK
+    made = []
+    for line in pick.get("lines", []):
+        po_id = f"PO-A{await conn.fetchval('select count(*)+9000 from purchase_orders')}"
+        await conn.execute(
+            """insert into purchase_orders (id, component_id, supplier_id, warehouse_id,
+                   quantity, unit_price, mode, expected_delivery, status,
+                   created_by_agent, incident_id)
+               values ($1,$2,$3,'Pune-Plant-1',$4,$5,$6::transport_mode,$7,'open',
+                       true,$8)""",
+            po_id, order["required_component"], line["supplier_id"], line["quantity"],
+            line["unit_price"], line["mode"], CLOCK.now().replace(microsecond=0),
+            incident_id)
+        made.append(po_id)
+    if made:
+        await emit(conn, incident_id=incident_id, actor="agent",
+                   event_type="ERP_UPDATED",
+                   human_summary=f"Raised {len(made)} purchase order(s) on instruction: "
+                                 f"{', '.join(made)}.",
+                   agent_reason=("An operator asked for a specific quantity. It went "
+                                 "through the same constraint filters and the same "
+                                 "authority check as anything I raise myself."),
+                   payload={"purchase_orders": made, "instruction": parsed["text"]})
+    return made
+
+
 # ------------------------------------------------------------------ verbs ---
 
 
@@ -245,6 +279,80 @@ async def _do_source(conn, parsed: dict, last: dict | None = None) -> dict[str, 
                             {"production_order_id": order["id"],
                              "required_component": order["required_component"]})
     plan = proc.to_dict()
+
+    # --- an explicit quantity is its own question -----------------------------
+    # "Buy ten more" is not "recover this run". Honour the number, price it
+    # against the same filters and weights, and place it if it is inside
+    # authority. Quietly re-solving for our own shortfall instead would be the
+    # system overruling a number the operator chose without telling them.
+    if parsed.get("quantity"):
+        from .solver import solve_for_quantity
+        want = int(parsed["quantity"])
+        excl = [r["target"] for r in await conn.fetch(
+            "select target from agent_constraints "
+            "where active and constraint_type='exclude_supplier'")]
+        q = await solve_for_quantity(conn, order["id"], want, exclude=excl)
+        pick = q.get("chosen")
+
+        qplan = [
+            {"step": f"Price {want} units of {order['component_name']}", "state": "done",
+             "detail": "Your number, not my shortfall calculation."},
+            {"step": "Apply the hard constraints", "state": "done",
+             "detail": "Certification, minimum order, hazmat routing and budget. "
+                       "A minimum order above what you asked for is a refusal, not a "
+                       "reason to buy more than you wanted."},
+            {"step": "Score on continuity, cost and supplier risk", "state": "done"},
+        ]
+
+        if not pick:
+            return _response(
+                "blocked",
+                f"No supplier can give you {want} units of {order['component_name']} "
+                f"without breaking a hard rule.",
+                plan=qplan + [{"step": "Place the order", "state": "blocked"}],
+                blockers=_blockers_from(q), alternatives=_alternatives_from(q),
+                human_action_required="Relax the quantity, or accept an alternative.",
+                context={"production_order_id": order["id"],
+                         "component_id": order["required_component"]},
+                understood=parsed)
+
+        lines = ", ".join(
+            f"{l['quantity']} from {l.get('supplier_name') or l['supplier_id']} "
+            f"at ₹{float(l['unit_price']):,.0f}/unit by {l['mode']}"
+            for l in pick.get("lines", []))
+
+        if pick.get("requires_approval"):
+            return _response(
+                "needs_approval",
+                f"Best compliant way to get {want}: {pick['label']} at "
+                f"₹{float(pick['total_cost']):,.0f}. That is past my "
+                f"₹{APPROVAL_THRESHOLD_INR:,} limit, so I have not placed it.",
+                plan=qplan + [{"step": "Place the order", "state": "waiting on you"}],
+                blockers=_blockers_from(q), alternatives=_alternatives_from(q),
+                human_action_required="Approve it on the Approvals screen.",
+                context={"production_order_id": order["id"],
+                         "component_id": order["required_component"]},
+                understood=parsed)
+
+        incident_id = await agent.wake(
+            conn, component_id=order["required_component"],
+            trigger=f"human_command: {parsed['text'][:120]}", po_id=order["id"])
+        placed = await _place(conn, order, pick, incident_id, parsed)
+        return _response(
+            "completed",
+            f"Ordered {want} × {order['component_name']} — {pick['label']} at "
+            f"₹{float(pick['total_cost']):,.0f}, inside my authority.",
+            plan=qplan + [{"step": "Place the order", "state": "done",
+                           "detail": lines or None}],
+            blockers=_blockers_from(q), alternatives=_alternatives_from(q),
+            actions_taken=[{"action": "purchase_order_created", "label": pick["label"],
+                            "cost": float(pick["total_cost"]),
+                            "units_covered": pick.get("units_covered"),
+                            "detail": ", ".join(placed) if placed else lines}],
+            incident_id=incident_id,
+            context={"production_order_id": order["id"],
+                     "component_id": order["required_component"]},
+            understood=parsed)
 
     if int(order["shortfall"] or 0) <= 0 and not parsed.get("quantity"):
         return _response(

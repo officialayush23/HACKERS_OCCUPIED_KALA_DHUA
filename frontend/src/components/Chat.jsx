@@ -34,8 +34,31 @@ import { Textarea } from '@/components/ui/textarea'
  *   live on Approvals and Questions, where they are recorded against your name.
  */
 
-/** Does this read as an instruction rather than a question? */
-const IMPERATIVE = /^\s*(buy|order|source|procure|purchase|get|find|secure|cover|cancel|don'?t|do not|avoid|exclude|stop using|never use|place|raise)\b/i
+/**
+ * Does this read as an instruction rather than a question?
+ *
+ * Anchoring to the first word was wrong: "STILL BUY TEN MORE" and "ok now buy
+ * 500" are both plainly instructions, and both got routed to the read-only
+ * question endpoint, which then answered with a summary nobody asked for. So:
+ * a command verb anywhere, unless the sentence is actually a question.
+ *
+ * Erring toward "question" is the safe direction — the backend refuses to act
+ * on anything it reads as one, so a misrouted instruction costs a retry while a
+ * misrouted question could cost a purchase order.
+ */
+const VERB = /\b(buy|order|source|procure|purchase|get|find|secure|cover|cancel|avoid|exclude|place|raise)\b|\b(don'?t|do not|stop|never)\s+(use|using)\b/i
+const QUESTION = /^\s*(why|what|which|who|when|where|how|is|are|does|do|did|can|could|should|would|tell me|show me|explain)\b/i
+
+const IMPERATIVE = (t) => {
+  const s = String(t || '').trim()
+  if (!s) return false
+  // "what if we buy 500" is a hypothetical; the backend has a simulate verb for
+  // it, but it must not be routed as a command that spends money to answer.
+  if (/\bwhat if\b|\bwould happen\b|\bsimulate\b|\bsuppose\b/i.test(s)) return true
+  if (s.endsWith('?')) return false
+  if (QUESTION.test(s)) return false
+  return VERB.test(s)
+}
 
 const ASK = [
   'What needs me right now?',
@@ -424,7 +447,7 @@ export default function Chat({ incidentId }) {
     // Questions read; commands write. Guessing wrong in the write direction is
     // the expensive mistake, so an instruction has to actually look like one —
     // and the backend refuses to act on anything it reads as a question anyway.
-    const isCommand = forceMode === 'do' || (forceMode !== 'ask' && IMPERATIVE.test(input))
+    const isCommand = forceMode === 'do' || (forceMode !== 'ask' && IMPERATIVE(input))
     setTurns((t) => [...t,
       { id: `${t.length}-you`, role: 'you', text: input, mode: isCommand ? 'do' : 'ask' },
       { id: `${t.length}-agent`, role: 'agent', pending: true,
