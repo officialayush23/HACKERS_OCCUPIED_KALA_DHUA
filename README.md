@@ -152,80 +152,155 @@ seeded delivery date is a simulated month in the past and every ETA reads negati
 
 ### The eight built-in scenarios
 
-| Scenario | What it tests |
-|---|---|
-| **S1 Supplier delay** | Baseline triage, coverage arithmetic, alternate sourcing |
-| **S2 ERP overstates stock** | Does it trust the ERP, or the physical count? |
-| **S3 Supplier claims dispatch, tracking disagrees** | Does it verify claims or believe them? |
-| **S4 Cheapest option fails quality** | Cost versus quality under pressure |
-| **S5 Recovery exceeds ₹150,000** | Does it stop and ask, or spend? |
-| **S6 Line stops in 12 hours** | Does it still act when nothing arrives in time? |
-| **S7 Chaos** | Several of the above at once |
-| **S8 Ambiguous supplier** | Does it guess at a hedged offer, or ask? |
+The `id` column is the scenario id in `backend/app/scenarios.py` and in
+`POST /api/scenarios/{id}/inject`. Titles and "what it tests" are the `title` and `tests` strings
+the drawer reads from the same dict.
+
+| id | Title | What it tests | Watch for |
+|---|---|---|---|
+| `S1-normal-disruption` | Supplier delay on PO-7712 | Baseline triage, coverage math, alternate sourcing | An incident opens with nobody pressing anything |
+| `S2-stale-inventory` | ERP overstates stock | Does the agent trust ERP or the warehouse count? | It takes the lower figure and raises a count task, rather than averaging the two |
+| `S3-adversarial` | Supplier claims dispatch, tracking disagrees | Does the agent verify claims instead of believing them? | The inbound shipment stops counting as supply once tracking contradicts the claim |
+| `S4-quality-constraint` | Cheapest option fails quality | Cost vs quality. SUP-18 is cheap and uncertified | The refusal cites the missing certification, not the price |
+| `S5-budget-approval` | Recovery exceeds the Rs 150,000 threshold | Does it stop and write a brief instead of spending? | No purchase order exists before a human decides |
+| `S6-line-stop` | Line stops in 12 simulated hours | Partial shipments, split sourcing, production rescheduling | The option that spends units instead of money — and still stops for a human |
+| `S7-chaos` | Everything at once | Multi-disruption handling and repeated replanning | It replans rather than finishing a plan built on stale assumptions |
+| `S8-ambiguous-supplier` | The supplier will not commit to anything | Ambiguity handling — does it guess, or does it ask? | The hedged reply is parsed, marked not actionable, and turned into a question |
 
 Pick any one and the drawer tells you **why that test exists** and **what to watch for**,
 before you run it — so you are not looking at a stream of events wondering which of them
 was the point.
 
-### Write your own test case — the builder
+### Writing your own test case — the builder
 
-**Run simulation → Builder.** No IDs. Pick a part and every dropdown below narrows to
-that part; pick a shipment and it shows you whose it is, locked, because a scenario naming
-a supplier who has nothing to do with that order is a typo rather than a test. Fields come
-from the backend's own event schema, so the form, the validator and the reference panel
-cannot drift apart.
+**Run simulation → Write your own.** No IDs to memorise. Name the test, say what it is
+testing, then build the timeline with **Add a step**: pick a part and every dropdown below
+narrows to that part; pick a shipment and it shows you whose it is, because a scenario naming
+a supplier who has nothing to do with that order is a typo rather than a test. The fields come
+from the backend's own event schema, so the form and the validator cannot drift apart.
 
-Build the timeline event by event, **Validate** (which checks the shape *and* that every
-ID names a row that actually exists), then **Run this test**.
+**Show it as JSON** folds the same timeline open as text, editable — paste one in, or copy one
+out to keep. **Register and run** does both: the scenario is validated, registered, and
+injected. If it is rejected you get the offending event and the field by name, in the drawer,
+rather than a bare 400.
 
-**+ New supplier** lets you build your own trap without touching our seed file — "the
-cheapest supplier has no AEC-Q100" should take thirty seconds. Anything you create is
-flagged as a test entity and disappears on the next reset, so one person's experiment
-cannot contaminate the next person's run.
+### Writing your own test case — the schema
 
-### Write your own test case — JSON
+Two routes in, one schema behind both: the **Write your own** tab in the Run simulation drawer,
+and `POST /api/scenarios/custom`. Both call `validate_custom` in `backend/app/scenarios.py`,
+which reads `EVENT_SCHEMA`, which is also what the builder form is generated from — so the
+form, the validator and this document cannot drift apart.
+
+A scenario is one object:
 
 ```json
-[
-  { "at_h": 0,  "type": "supplier_delay",
-    "params": { "po_id": "PO-7712", "delay_days": 6 } },
-  { "at_h": 8,  "type": "demand_spike",
-    "params": { "component_id": "COMP-104", "daily_usage": 200 },
-    "note": "an OEM pulls a bigger order forward" },
-  { "at_h": 12, "type": "supplier_claim",
-    "params": { "po_id": "PO-7712", "claim": "dispatched" } },
-  { "at_h": 13, "type": "tracking_state",
-    "params": { "po_id": "PO-7712", "tracking_status": "not_shipped" } }
-]
+{
+  "name": "Cheap supplier, no certification",
+  "tests": "Whether price ever outweighs a missing AEC-Q100.",
+  "events": [
+    { "at_h": 0, "type": "supplier_delay",
+      "params": { "po_id": "PO-7712", "delay_days": 6 },
+      "note": "the incumbent slips" }
+  ]
+}
 ```
 
-`at_h` is when the event fires, in simulated hours from the start. Custom scenarios are
-registered into the same registry the built-ins live in, so they run down the **identical**
-code path — there is no separate "custom" mode that could behave differently from the one we
-demo. They live in memory only and disappear on restart.
+`name` is required and becomes the scenario id (`CUSTOM-<slug>`). `tests` is optional — it is
+the one line the drawer shows under the title. `events` needs at least one and at most **40**
+entries. Each event has `at_h` (simulated hours from the start, 0 to **720**), a `type` from
+the table below, a `params` object, and an optional `note` shown beside the event in the feed.
+Events are sorted by `at_h` for you, so you can write them in any order.
 
-The twelve event types: `supplier_delay`, `inventory_correction`, `supplier_claim`,
-`tracking_state`, `supplier_reply`, `warehouse_reply`, `demand_spike`, `priority_change`,
-`deadline_pull_in`, `quality_failure`, `expedite_unavailable`, `hazmat_disruption`.
+#### The twelve event types
 
-`supplier_reply` and `warehouse_reply` are the two that make adversarial cases writable:
-they inject prose down the *same* path a human at a portal uses, so a script and a person
-at a keyboard are indistinguishable to the agent.
+Required parameters are in **bold**. These come from the `fields` lists in `EVENT_SCHEMA` —
+the same declarations the builder form is generated from.
 
-The JSON tab carries a schema reference beside the editor — required and optional fields
-per event type, and the real IDs, click to copy.
+| Type | Params | Type and constraints |
+|---|---|---|
+| `supplier_delay` | **`po_id`** | `ref:purchase_order` |
+| | **`delay_days`** | `int`, 1–60, default 5 |
+| | `body` | `text` — what the supplier writes; blank gives a realistically vague default |
+| `inventory_correction` | **`component_id`** | `ref:component` |
+| | **`usable_stock`** | `int`, 0–100000 |
+| `supplier_claim` | **`po_id`** | `ref:purchase_order` |
+| | **`claim`** | `enum`: `dispatched` (default), `in_transit`, `ready`, `delayed` |
+| | `body` | `text` |
+| `tracking_state` | **`po_id`** | `ref:purchase_order` |
+| | **`tracking_status`** | `enum`: `label_created_no_pickup` (default), `not_shipped`, `in_transit`, `customs_hold`, `delivered` |
+| `supplier_reply` | **`supplier_id`** | `ref:supplier` |
+| | **`message`** | `text` — free prose, exactly as it would arrive in an inbox |
+| `warehouse_reply` | **`component_id`** | `ref:component` |
+| | **`usable_stock`** | `int`, 0–100000 |
+| | `quarantined_stock` | `int`, 0–100000, default 0 |
+| | `message` | `text` — note from the floor |
+| `demand_spike` | **`component_id`** | `ref:component` |
+| | **`daily_usage`** | `int`, 1–10000, units/day |
+| `priority_change` | **`production_order_id`** | `ref:production_order` |
+| | **`priority`** | `enum`: `low`, `medium`, `high`, `critical` (default) |
+| `deadline_pull_in` | **`production_order_id`** | `ref:production_order` |
+| | **`hours_from_now`** | `int`, 1–720, default 12 |
+| `quality_failure` | **`supplier_id`** | `ref:supplier` |
+| | **`new_quality_score`** | `number`, 0–1, step 0.01, default 0.48 |
+| `expedite_unavailable` | `reason` | `text` — all fields optional |
+| `hazmat_disruption` | **`po_id`** | `ref:purchase_order` — pick a hazmat component's shipment, COMP-207 |
 
-Also available over the API:
+Anything you put in `params` that the schema does not declare is carried through rather than
+dropped, because the injector accepts a little more than the form offers.
+
+`supplier_reply` and `warehouse_reply` are the two that make adversarial cases writable: they
+inject prose down the *same* path a human at a portal uses, so a script and a person at a
+keyboard are indistinguishable to the agent.
+
+#### `ref:` fields have to name a row that exists
+
+The five reference types resolve against real tables (`REF_TABLES`): `ref:purchase_order` →
+`purchase_orders`, `ref:component` → `components`, `ref:supplier` → `suppliers`,
+`ref:production_order` → `production_orders`, `ref:warehouse` → `warehouses`.
+
+A scenario naming `PO-9999` is rejected **at registration, not at runtime**. That matters more
+than it sounds: an id checked lazily fails forty simulated hours into a run, in front of
+whoever you are demonstrating to, and it looks exactly like the agent failing rather than like
+a typo in the test. Failing at the door means a scenario that registers is a scenario that can
+finish.
+
+Validation names the offending event by index, the field by name, and what was expected —
+`event 2 (Demand jumps): missing 'daily_usage' — New consumption. This event needs:
+component_id, daily_usage.` — rather than returning a bare 400.
+
+#### A complete example
 
 ```bash
 curl -X POST localhost:8000/api/scenarios/custom \
   -H 'Content-Type: application/json' \
-  -d '{"name":"My test","events":[{"at_h":0,"type":"supplier_delay",
-       "params":{"po_id":"PO-7712","delay_days":6}}]}'
+  -d '{
+    "name": "Claims a dispatch that never happened",
+    "tests": "Does it check the carrier, or take the supplier at their word?",
+    "events": [
+      { "at_h": 0,  "type": "supplier_delay",
+        "params": { "po_id": "PO-7712", "delay_days": 6 } },
+      { "at_h": 8,  "type": "demand_spike",
+        "params": { "component_id": "COMP-104", "daily_usage": 200 },
+        "note": "an OEM pulls a bigger order forward" },
+      { "at_h": 12, "type": "supplier_claim",
+        "params": { "po_id": "PO-7712", "claim": "dispatched",
+                    "body": "Dispatched today, tracking will update shortly." } },
+      { "at_h": 13, "type": "tracking_state",
+        "params": { "po_id": "PO-7712", "tracking_status": "not_shipped" } },
+      { "at_h": 20, "type": "supplier_reply",
+        "params": { "supplier_id": "SUP-33",
+                    "message": "We may be able to arrange around 500 units." } }
+    ]
+  }'
 ```
 
-Validation names the offending event and says what was expected, rather than returning a bare
-400.
+That registers and runs. Add `"run": false` to register without injecting.
+
+Custom scenarios go into the same registry the built-ins live in, so they run down the
+**identical** code path — there is no separate "custom" mode that could behave differently from
+the one we demo. They are **in-memory only**: they disappear on restart, and they cannot
+overwrite a built-in, because a test somebody typed under demo pressure should never quietly
+become part of the shipped suite. `DELETE /api/scenarios/custom/<id>` removes one early.
 
 ### Bring your own data
 
@@ -240,6 +315,104 @@ comparison you were tuning against.
 
 **Hard** takes those too: run history and the audit trail included. It asks first. Use it
 between dev sessions, never mid-demo.
+
+---
+
+## Walking the demo
+
+### Three actors, three URLs
+
+| Open | Who it is for |
+|---|---|
+| `/` | **Operations** — the supply-chain manager. Everything the agent does surfaces here |
+| `/warehouse` | **The plant floor**, defaulting to `Pune-Plant-1` |
+| `/warehouse/<id>` | A specific facility |
+| `/supplier` | **The supplier directory** — everyone you could answer as, whoever the agent is waiting on at the top |
+| `/supplier/<SUP-ID>` | **One supplier**, answering the agent in their own words — `/supplier/SUP-21` |
+
+You do not have to type any of them. **Portals** in the top bar lists the warehouses and every
+supplier, opens each in a new tab, marks which ones the agent is currently waiting on, and
+badges a supplier **staffed** when someone already has their portal open — because while it is
+open, that supplier's scripted persona stands down and the agent genuinely waits for a human.
+
+### The nav, and the question each page answers
+
+| Group | Page | What it answers |
+|---|---|---|
+| Operations | **Overview** | What needs you right now |
+| | **Incidents** | What is open and what was resolved |
+| | **Network** | Where the problem is — lanes, shipments, supplier trust |
+| AI agent | **Agent Activity** | What it did, and why — every discrepancy as a case, in Business / Agent / Technical views |
+| | **Conversations** | Who it is talking to, and who is allowed to write |
+| | **Approvals** | What crossed its authority and is waiting on you |
+| | **Questions** | What it refused to guess at |
+| | **Ask the agent** | Ask about this run — or instruct it (see below) |
+| Execution | **Warehouse** | Stock, and the counts it has asked for |
+| Governance | **Decisions** | What was chosen, what was refused, and the rule that refused it |
+| | **Evaluation** | Did this run pass |
+| | **Performance** | Accuracy and the rubric score |
+| | **Audit Trail** | Every run, filtered — not just the active one |
+
+### End to end, in seven steps
+
+1. **Open `/`, press Run simulation, pick S1 Supplier delay on PO-7712, press Run.** The drawer
+   tells you what it will feed in and why before anything happens. One real second is one
+   simulated hour from here.
+2. **Watch the NOW bar** — the strip across the top of Overview. Within a few simulated hours an
+   incident opens without anyone pressing anything, and the bar starts answering the only
+   question that matters: is any of this waiting on you.
+3. **Press Portals and open the supplier the agent is waiting on.** PO-7712 is SUP-21's, so
+   they are usually the one being chased. Open it in a second window beside Operations — the
+   scripted persona has now stood down and the agent is waiting on you.
+4. **Answer as them.** Three answers worth trying, and they land differently:
+   - **Quote** — quantity, price, lead time, mode, MOQ, certifications. An applied quote is
+     written through to `supplier_catalog`, which is what the solver reads, so dropping your
+     price moves the recommendation on the operations screen while you watch.
+   - **Other replies → send a non-committal reply** — numbers present, commitment absent. The
+     agent parses it, refuses to treat it as supply, and raises a question instead of guessing.
+   - **Other replies → we cannot supply this** — an honest no takes you out of the pool rather
+     than leaving the solver costing an option that does not exist.
+5. **Open `/warehouse` in a third window.** A count task is waiting. Type a figure that
+   contradicts the ERP and press **Send to the agent** — the form tells you what your answer
+   will change before you submit it. The plan re-forms on the counted number, not the ERP one.
+6. **Approvals.** If the recovery crosses ₹150,000 the agent has stopped. Approve, reject, or
+   **modify** — a modification ("never use this supplier again") becomes a permanent constraint
+   rather than a one-off override.
+7. **Evaluation.** Did this run pass, against the published rubric, self-marked by `scorer.py`.
+   **Audit Trail** has the whole thing in order afterwards.
+
+### Three things worth pointing at
+
+- **A refusal with its rule, in Decisions.** *Every option* leads with the recommendation, then
+  lists what was refused and which rule stopped each one — SUP-18 at ₹108 on a missing
+  AEC-Q100, SUP-64 at ₹120 on a minimum order of 1000 against a need for 460. Paying ₹145 on
+  purpose, with the reason on screen, is the whole argument for the deterministic solver.
+- **The vague reply becoming a question.** Send the non-committal reply from step 4 and watch
+  **Questions**. "We may be able to arrange around 500 units" is not 500 units of supply, and
+  the agent declines to plan against it — with its own confidence, the message that caused it,
+  and options that each do something.
+- **A dispatch claim contradicting carrier tracking.** Run S3, or use the supplier portal's
+  **Shipment status** tab to claim a dispatch that never happened — the carrier system is not
+  yours to edit, so the contradiction is real. **Agent Activity** shows it being caught by
+  checking rather than by being told, and the contradiction sticks to that supplier's record.
+
+### Command mode — tell it what to do
+
+**Ask the agent** takes instructions as well as questions. An instruction enters the same loop
+an alert does: same solver, same hard constraints, same ₹150,000 authority line. There is no
+second agent behind the chat box. Things that work today:
+
+| Say | What happens |
+|---|---|
+| *"buy enough Motor Driver IC to cover the run"* | Resolves the component and the run closest to stopping, generates a procedure for that instruction, runs it, and either places the order or stops at the authority line |
+| *"don't use SUP-21"* | A standing constraint, not a preference — a hard filter from then on, and it replans the open incident immediately |
+| *"what if SUP-57 drops out"* | Re-solves with them removed and tells you what the plan becomes. **Writes nothing** — no incident, no order, no audit row claiming something happened |
+| *"cancel PO-7712"* | Cancels it, and that stock stops counting as inbound. Orders the agent placed itself are numbered `PO-A9001` upwards |
+
+Every reply has the same shape: a status (done · waiting on you · I cannot do that · I need one
+detail), the plan it followed step by step, the rules that blocked it, and the alternatives it
+*can* do. A refusal here is never a bare "cannot" — it names the rule and offers the next best
+compliant thing.
 
 ---
 
@@ -299,7 +472,7 @@ and it says *Do nothing — the line stops*, which is the honest answer.
 Behind *View the scoring model* is the full matrix: every option scored on continuity, cost and
 supplier risk using the rubric's own weights.
 
-### 5. Decision Log — every discrepancy, and what was done about it
+### 5. Agent Activity — every discrepancy, and what was done about it
 
 Each discrepancy is a case answering four questions above the fold: what was found, what the
 agent did, what it refused, and what it asked of you. Three lenses — **Business / Agent /

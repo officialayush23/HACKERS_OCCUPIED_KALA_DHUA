@@ -1,0 +1,66 @@
+# Render blueprint for the DisruptionOps API.
+#
+# The service is already deployed by hand; this exists so the deployment is
+# reproducible and so the environment is written down somewhere other than a
+# dashboard nobody else can see.
+#
+# `sync: false` means "prompt me, do not store in git". Every secret is marked
+# that way — none of them belong in this file, and the repository history is
+# not a place you can rotate a key out of.
+
+services:
+  - type: web
+    name: disruptionops-api
+    runtime: python
+    region: singapore            # closest to the Supabase ap-south pooler
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    # No --reload in production: it doubles the process and reloads on any
+    # filesystem twitch, which on a free instance is most of the memory budget.
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+
+    envVars:
+      # ---- database ---------------------------------------------------------
+      # Use the Supabase *transaction pooler* string (port 6543), not the direct
+      # 5432 one. Render's free tier recycles connections aggressively and the
+      # direct connection runs out of slots long before the demo does.
+      - key: DATABASE_URL
+        sync: false
+
+      # ---- model ------------------------------------------------------------
+      # Production is Bedrock. `auto` picks whichever key is present, so setting
+      # only this one is enough — and if you later switch to xAI you set
+      # XAI_API_KEY instead and change nothing else.
+      - key: AWS_BEARER_TOKEN_BEDROCK
+        sync: false
+      - key: AWS_REGION
+        value: us-east-1
+      - key: LLM_PROVIDER
+        value: auto
+      - key: LLM_ENABLED
+        value: "true"
+
+      # ---- CORS -------------------------------------------------------------
+      # The deployed frontend origin, no trailing slash. Comma-separate several.
+      # Without this every preflight is a 400 that reads like a routing bug.
+      - key: ALLOWED_ORIGINS
+        sync: false
+
+      # ---- policy -----------------------------------------------------------
+      # The authority line the agent will not cross on its own. Judges read this
+      # number off the screen, so it has to be the same one the solver uses.
+      - key: APPROVAL_THRESHOLD_INR
+        value: "150000"
+      - key: EMERGENCY_BUDGET_INR
+        value: "500000"
+      - key: MAX_TOOL_CALLS_PER_INCIDENT
+        value: "25"
+      # 1 real second = 1 simulated hour. Raise it to slow a demo down.
+      - key: CLOCK_SECONDS_PER_SIM_HOUR
+        value: "1"
+
+      - key: PYTHON_VERSION
+        value: "3.12"

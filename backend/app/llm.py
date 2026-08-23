@@ -124,13 +124,38 @@ async def classify_intent(text: str) -> tuple[str | None, bool]:
         f"source  = they want stock bought, ordered or covered\n"
         f"exclude = they want a supplier avoided or banned\n"
         f"cancel  = they want a purchase order withdrawn\n"
+        f"simulate = they are asking what WOULD happen, not asking you to do it\n"
         f"explain = they are asking a question, not giving an order\n\n"
         f"Instruction: {text!r}\n\nReply with one word and nothing else.",
         max_tokens=6)
     if not raw:
         return None, False
     word = raw.strip().split()[0].strip(".,'\"").lower()
-    return (word if word in ("source", "exclude", "cancel", "explain") else None), True
+    return (word if word in ("source", "exclude", "cancel", "explain", "simulate")
+            else None), True
+
+
+async def plan_procedure(instruction: str, tools: list[dict]) -> list[str] | None:
+    """Reorder or trim a procedure, choosing only from tools that exist.
+
+    The model is handed a closed registry and asked for an ordering. Anything it
+    names that is not in that registry is dropped by the caller, so the worst a
+    confused model can do here is produce a shorter plan — never one the system
+    cannot run. That constraint is what makes generated procedures safe to
+    execute rather than merely display.
+    """
+    listing = "\n".join(f"- {t['name']}: {t['does']} (reads {t['reads']})" for t in tools)
+    raw = await _call(
+        f"You are ordering the steps an operations agent should take.\n\n"
+        f"Available steps — you may use ONLY these names:\n{listing}\n\n"
+        f"Instruction: {instruction!r}\n\n"
+        f"Reply with the step names to run, in order, comma-separated. No prose. "
+        f"Omit steps that are irrelevant to this instruction.",
+        max_tokens=120)
+    if not raw:
+        return None
+    names = [w.strip().strip("-•\"'`") for w in raw.replace("\n", ",").split(",")]
+    return [n for n in names if n] or None
 
 
 async def diagnose() -> dict[str, Any]:

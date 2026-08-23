@@ -40,7 +40,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from . import agent, llm
+from . import agent, llm, procedure
 from .core import APPROVAL_THRESHOLD_INR, emit
 
 # --------------------------------------------------------------- parsing ----
@@ -50,7 +50,12 @@ from .core import APPROVAL_THRESHOLD_INR, emit
 # units"; it is the same answer, free, and it cannot hallucinate a different
 # number. The model is asked only when the deterministic pass finds no verb.
 
-_QTY   = re.compile(r"\b(\d[\d,]*)\s*(?:units?|pcs?|pieces?)\b", re.I)
+_WORDS = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+          "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "twenty": 20,
+          "fifty": 50, "hundred": 100, "thousand": 1000}
+_WORDQTY = re.compile(r"\b(" + "|".join(_WORDS) + r")\s+(?:more|extra|units?|pcs?)\b", re.I)
+_MORE  = re.compile(r"\b(more|extra|again|on top)\b", re.I)
+_QTY   = re.compile(r"\b(\d[\d,]*)\s*(?:units?|pcs?|pieces?|more|extra)?\b(?=.*\b(?:more|extra|units?|pcs?|pieces?)\b)", re.I)
 _BARE  = re.compile(r"\b(\d[\d,]{2,})\b")
 _DAYS  = re.compile(r"\b(?:cover|last|enough for)\D{0,20}?(\d+)\s*day", re.I)
 _SUP   = re.compile(r"\b(SUP-\d+)\b", re.I)
@@ -58,6 +63,11 @@ _PO    = re.compile(r"\b(PO-[A-Z0-9]+)\b", re.I)
 _PROD  = re.compile(r"\b(PROD-\d+)\b", re.I)
 
 _VERBS = [
+    # Simulation is checked first on purpose. "What if we buy 500 units" contains
+    # "buy", and reading that as an instruction would spend money to answer a
+    # hypothetical — the single most expensive misreading available here.
+    ("simulate", r"\b(what if|what would happen|simulate|suppose|hypothetically|"
+                 r"if .{0,40}\b(fail|fails|slips|slipped|delayed|late|dropped|gone)\b)"),
     ("source",  r"\b(buy|order|source|procure|purchase|get me|find|secure|cover)\b"),
     ("exclude", r"\b(don'?t use|do not use|avoid|exclude|blacklist|stop using|never use)\b"),
     ("cancel",  r"\b(cancel|revoke|undo|stop)\b.*\bPO-"),
@@ -77,12 +87,21 @@ def parse(text: str) -> dict[str, Any]:
             break
 
     qty = _QTY.search(t) or (_BARE.search(t) if verb == "source" else None)
+    word = _WORDQTY.search(t)
     days = _DAYS.search(t)
+
+    quantity = None
+    if qty:
+        quantity = int(qty.group(1).replace(",", ""))
+    elif word:
+        quantity = _WORDS[word.group(1).lower()]
 
     return {
         "text": t,
         "verb": verb,
-        "quantity": int(qty.group(1).replace(",", "")) if qty else None,
+        "quantity": quantity,
+        # "buy ten MORE" is an increment on the last answer, not an absolute.
+        "relative": bool(_MORE.search(t)),
         "cover_days": int(days.group(1)) if days else None,
         "supplier_ids": [s.upper() for s in _SUP.findall(t)],
         "po_id": (_PO.search(t).group(1).upper() if _PO.search(t) else None),
@@ -90,7 +109,7 @@ def parse(text: str) -> dict[str, Any]:
     }
 
 
-async def _resolve_component(conn, text: str) -> dict | None:
+async def _resolve_component(conn, text: str, *, fallback_id: str | None = None) -> dict | None:
     """Match a component by name, part number or id — longest name first.
 
     Longest-first matters: "Motor Driver IC" and "Motor Driver IC Rev B" both
@@ -108,6 +127,11 @@ async def _resolve_component(conn, text: str) -> dict | None:
                 break
         if best:
             break
+    # "buy ten more" names nothing. The subject of the previous turn is the only
+    # sensible reading, and guessing a different component would be worse than
+    # asking — so this is only used when the caller passes one forward.
+    if best is None and fallback_id:
+        best = next((dict(r) for r in rows if r["id"] == fallback_id), None)
     return best
 
 
@@ -198,9 +222,10 @@ def _alternatives_from(result: dict) -> list[dict]:
 # ------------------------------------------------------------------ verbs ---
 
 
-async def _do_source(conn, parsed: dict) -> dict[str, Any]:
+async def _do_source(conn, parsed: dict, last: dict | None = None) -> dict[str, Any]:
     """Get me stock. The full loop, synchronously, with the plan stated up front."""
-    comp = await _resolve_component(conn, parsed["text"])
+    comp = await _resolve_component(conn, parsed["text"],
+                                    fallback_id=(last or {}).get("component_id"))
     order = await _target_order(conn, comp["id"] if comp else None)
 
     if order is None:
@@ -211,19 +236,15 @@ async def _do_source(conn, parsed: dict) -> dict[str, Any]:
                                   "or the production order (for example “PROD-882”).",
             understood=parsed)
 
-    plan = [
-        {"step": "Read the live position", "state": "done",
-         "detail": f"{order['component_name']} for {order['oem_customer']} — "
-                   f"short {max(0, int(order['shortfall'] or 0))} units, "
-                   + (f"{float(order['coverage_days']):.1f} days of cover left."
-                      if order["coverage_days"] is not None else "cover unknown.")},
-        {"step": "Score every supplier that could serve it", "state": "done"},
-        {"step": "Apply the hard constraints", "state": "done",
-         "detail": "Certification, minimum order, hazmat routing and budget are "
-                   "filters, not weightings. No price compensates for failing one."},
-        {"step": "Check it against my authority", "state": "done",
-         "detail": f"I may commit up to ₹{APPROVAL_THRESHOLD_INR:,} without asking."},
-    ]
+    # Generate the procedure for *this* instruction rather than running a fixed
+    # pipeline, then execute it with per-step tracking. See procedure.py for why
+    # generation is selection over a closed registry rather than free planning.
+    proc = procedure.generate(parsed["text"], verb="source")
+    await procedure.refine_with_model(proc, parsed["text"])
+    await procedure.execute(conn, proc,
+                            {"production_order_id": order["id"],
+                             "required_component": order["required_component"]})
+    plan = proc.to_dict()
 
     if int(order["shortfall"] or 0) <= 0 and not parsed.get("quantity"):
         return _response(
@@ -239,11 +260,40 @@ async def _do_source(conn, parsed: dict) -> dict[str, Any]:
         trigger=f"human_command: {parsed['text'][:120]}", po_id=order["id"])
 
     if incident_id is None:
+        # The risk detector nets off stock already inbound before the deadline;
+        # the raw position does not. Both are true and they disagree, so say the
+        # arithmetic out loud rather than the conclusion — "not actually short"
+        # over a plan that just said "short 600" reads as the system arguing
+        # with itself.
+        inbound = await conn.fetchval(
+            """select coalesce(sum(quantity),0) from purchase_orders
+                where component_id=$1 and status in ('open','in_transit')
+                  and expected_delivery <= $2""",
+            order["required_component"], order["deadline"]) or 0
+        raw = max(0, int(order["shortfall"] or 0))
         return _response(
             "completed",
-            f"I looked, and {order['component_name']} is not actually short once "
-            f"inbound stock is counted. I have not bought anything.",
-            plan=plan, context={"production_order_id": order["id"]}, understood=parsed)
+            f"I have not bought anything. {order['component_name']} is short "
+            f"{raw} on the shelf, but {inbound} units are already inbound before "
+            f"the deadline, which covers it. Buying more would be double-ordering.",
+            plan=plan + [{"step": "Net off what is already coming",
+                          "state": "done",
+                          "detail": f"short {raw} − inbound {inbound} = "
+                                    f"{max(0, raw - inbound)} genuinely uncovered."}],
+            alternatives=[{
+                "kind": "buy_anyway",
+                "label": f"Order {raw} anyway as cover",
+                "cost": 0,
+                "requires_approval": False,
+                "why_not_chosen": "Only worth it if you do not trust the inbound "
+                                  "shipment to arrive. Say “order N units of "
+                                  f"{order['component_name']} anyway” and I will.",
+            }],
+            human_action_required=None,
+            context={"production_order_id": order["id"],
+                     "component_id": order["required_component"],
+                     "inbound": int(inbound), "raw_shortfall": raw},
+            understood=parsed)
 
     await emit(conn, incident_id=incident_id, actor="human",
                event_type="HUMAN_COMMAND",
@@ -257,6 +307,14 @@ async def _do_source(conn, parsed: dict) -> dict[str, Any]:
     # happened rather than what was scheduled to happen.
     result = await agent.plan_now(conn, incident_id)
     st = agent.state_of(incident_id) or {}
+    if proc.follow_ups:
+        await emit(conn, incident_id=incident_id, actor="agent",
+                   event_type="FOLLOW_UP_RAISED",
+                   human_summary="; ".join(proc.follow_ups),
+                   agent_reason="Work I did not know about when I started. It is "
+                                "appended to the same plan rather than done quietly, "
+                                "so what changed mid-run is visible.",
+                   payload={"follow_ups": proc.follow_ups})
     chosen = (result or {}).get("chosen")
 
     ctx = {"production_order_id": order["id"],
@@ -306,6 +364,82 @@ async def _do_source(conn, parsed: dict) -> dict[str, Any]:
             "detail": pos[-1] if pos else "See the audit trail for the order ids.",
         }],
         incident_id=incident_id, context=ctx, understood=parsed)
+
+
+async def _do_simulate(conn, parsed: dict) -> dict[str, Any]:
+    """Answer a hypothetical without touching anything.
+
+    The same solver, the same constraints, `record=False`. Nothing is written:
+    no incident, no plan, no order, no audit row that claims something happened.
+    A what-if that leaves a trace is not a what-if, and an operator who cannot
+    ask "what if this supplier drops out" without consequences will not ask.
+    """
+    comp = await _resolve_component(conn, parsed["text"])
+    order = await _target_order(conn, comp["id"] if comp else None)
+    if order is None:
+        return _response("needs_clarification",
+                         "I could not tell which run you want me to test.",
+                         human_action_required="Name the component or the production run.",
+                         understood=parsed)
+
+    # "without SUP-21" — knock them out and re-solve around the loss.
+    exclude = list(parsed["supplier_ids"])
+    if not exclude:
+        sup = await conn.fetch(
+            "select id, coalesce(legal_name, name) as name from suppliers")
+        low = parsed["text"].lower()
+        exclude = [r["id"] for r in sup if r["name"] and r["name"].lower() in low]
+
+    from .solver import solve_for_production_order
+    base = await solve_for_production_order(conn, order["id"])
+    alt = await solve_for_production_order(conn, order["id"], exclude=exclude) \
+        if exclude else base
+
+    b, a = base.get("chosen"), alt.get("chosen")
+    lost = ", ".join(exclude) if exclude else None
+
+    if exclude and not a:
+        return _response(
+            "completed",
+            f"If {lost} dropped out there would be no compliant option left — "
+            f"the line stops.",
+            plan=[{"step": "Re-solved with them removed", "state": "done",
+                   "detail": "Nothing was written. This is a hypothetical."}],
+            blockers=_blockers_from(alt),
+            alternatives=_alternatives_from(alt),
+            human_action_required="Worth fixing before it happens rather than after.",
+            context={"simulated": True, "production_order_id": order["id"]},
+            understood=parsed)
+
+    if not b and not a:
+        return _response(
+            "completed",
+            f"{order['component_name']} is not short, so there is nothing to re-plan.",
+            plan=[{"step": "Checked the position", "state": "done"}],
+            context={"simulated": True}, understood=parsed)
+
+    if exclude:
+        delta = float(a["total_cost"]) - float(b["total_cost"]) if b else None
+        summary = (
+            f"If {lost} dropped out, the plan becomes {a['label']} at "
+            f"₹{float(a['total_cost']):,.0f}"
+            + (f" — ₹{abs(delta):,.0f} {'more' if delta > 0 else 'less'} than today."
+               if delta else "."))
+    else:
+        summary = (f"As things stand the plan is {b['label']} at "
+                   f"₹{float(b['total_cost']):,.0f}." if b
+                   else "There is no compliant option right now.")
+
+    return _response(
+        "completed", summary,
+        plan=[{"step": "Re-solved against the live position", "state": "done",
+               "detail": "Nothing was written — no incident, no order, no approval. "
+                         "This is a hypothetical."}],
+        blockers=_blockers_from(alt),
+        alternatives=_alternatives_from(alt),
+        context={"simulated": True, "production_order_id": order["id"],
+                 "excluded": exclude},
+        understood=parsed)
 
 
 async def _do_exclude(conn, parsed: dict) -> dict[str, Any]:
@@ -461,8 +595,14 @@ async def _do_choose(conn, incident_id: str, label: str) -> dict[str, Any]:
 
 async def run(conn, instruction: str, *, actor: str = "operator",
               choose: str | None = None,
-              incident_id: str | None = None) -> dict[str, Any]:
-    """The single door for human instructions."""
+              incident_id: str | None = None,
+              last: dict | None = None) -> dict[str, Any]:
+    """The single door for human instructions.
+
+    `last` is the context of the previous answer. Without it "buy ten more" has
+    no subject, and asking the operator to repeat the component every turn is
+    not a conversation.
+    """
     if choose:
         return await _do_choose(conn, incident_id, choose)
 
@@ -472,11 +612,13 @@ async def run(conn, instruction: str, *, actor: str = "operator",
     # and only to name the verb. Every consequence is still computed here.
     if parsed["verb"] is None:
         guess, _ = await llm.classify_intent(instruction)
-        if guess in ("source", "exclude", "cancel", "explain"):
+        if guess in ("source", "exclude", "cancel", "explain", "simulate"):
             parsed["verb"] = guess
 
+    if parsed["verb"] == "simulate":
+        return await _do_simulate(conn, parsed)
     if parsed["verb"] == "source":
-        return await _do_source(conn, parsed)
+        return await _do_source(conn, parsed, last)
     if parsed["verb"] == "exclude":
         return await _do_exclude(conn, parsed)
     if parsed["verb"] == "cancel":
