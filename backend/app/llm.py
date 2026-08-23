@@ -368,12 +368,51 @@ def deterministic_answer(question: str, state: dict) -> str:
     inv = state.get("inventory") or []
     q_pending = state.get("questions_open") or []
     approvals = state.get("approvals_pending") or []
+    placed = state.get("orders_placed") or []
+    shorts = state.get("shortages") or []
 
     tight = sorted((r for r in inv if (r.get("daily_usage") or 0) > 0),
                    key=lambda r: r["usable_stock"] / r["daily_usage"])
 
     def cover(r):
         return r["usable_stock"] / r["daily_usage"]
+
+    # ---- what did you buy / how much have you spent -----------------------
+    if any(k in q for k in ("buy", "bought", "order", "purchase", "spend", "spent",
+                            "cost so far", "committed", "po ")):
+        if not placed:
+            return ("No purchase order has been placed in this run. Either nothing crossed "
+                    "the threshold to act on, or what did is still waiting for your "
+                    "approval.")
+        total = sum(float(p.get("total_value") or 0) for p in placed)
+        head = (f"{len(placed)} purchase order(s), ₹{total:,.0f} committed. ")
+        lines = "; ".join(
+            f"{p['id']} — {p['quantity']} × {p['component']} from {p['supplier']} at "
+            f"₹{float(p.get('total_value') or 0):,.0f}"
+            + (f", due {p['expected_delivery']:%d %b}" if p.get("expected_delivery") else "")
+            for p in placed[:3])
+        return head + lines + ("." if len(placed) <= 3
+                               else f"; and {len(placed) - 3} more.")
+
+    # ---- are we covered / will it land in time ----------------------------
+    # This route exists because of a specific wrong answer: the agent said a part
+    # was "not actually short" while the panel beside it said "short 600". Both
+    # were true — 800 units were already inbound — and neither said so. An answer
+    # that gives one number without the other is the bug, not the number.
+    if any(k in q for k in ("covered", "in time", "on time", "will we make",
+                            "enough", "land", "arrive", "double", "again")):
+        if not shorts:
+            return "No production order is short once the safety buffer is included."
+        bits = []
+        for s in shorts[:3]:
+            net = max(0, int(s["shortfall"]) - int(s.get("inbound") or 0))
+            bits.append(
+                f"{s['component']} for {s['oem_customer']}: {s['required_units']} needed "
+                f"+ {s['safety_stock']} buffer − {s['on_hand']} on hand = {s['shortfall']} "
+                f"short, but {s.get('inbound') or 0} already land before the deadline, so "
+                + (f"{net} still has to be bought" if net
+                   else "buying more would double-order"))
+        return ". ".join(bits) + "."
 
     # "what needs me" / "action points" — the question people actually ask.
     if any(k in q for k in ("action", "need me", "needs me", "do now", "should i",
@@ -402,10 +441,18 @@ def deterministic_answer(question: str, state: dict) -> str:
         if not tight:
             return "No component has a usage rate on file, so cover cannot be computed."
         top = tight[:3]
-        return ("Tightest cover: " + ", ".join(
-            f"{r['display_name']} at {cover(r):.1f} days" for r in top) +
-            ". Where the ERP and the floor disagree the agent plans against the counted "
-            "figure, not the ERP one.")
+        gap = [r for r in inv
+               if int(r.get("erp_stock") or 0) > int(r.get("usable_stock") or 0)]
+        out = ("Tightest cover: " + ", ".join(
+            f"{r['display_name']} at {cover(r):.1f} days" for r in top) + ".")
+        if gap:
+            g = gap[0]
+            out += (f" The ERP overstates {g['display_name']} by "
+                    f"{int(g['erp_stock']) - int(g['usable_stock'])} units — planning runs "
+                    f"against the counted figure, not the ERP one.")
+        else:
+            out += " ERP and the counted floor figure agree everywhere."
+        return out
 
     if any(k in q for k in ("plan", "option", "recommend", "chosen", "doing about")):
         if not plans:
@@ -417,32 +464,93 @@ def deterministic_answer(question: str, state: dict) -> str:
 
     if any(k in q for k in ("incident", "risk", "wrong", "happening", "at risk")):
         if not inc:
+            # "0 open incidents" beside "1 recovery plan" is technically true and
+            # reads as a broken system. If a plan exists, the incident it belongs
+            # to has been closed, and saying so is the whole answer.
+            if plans:
+                return (f"No incident is open right now, but {len(plans)} recovery plan(s) "
+                        f"exist in this run — the incident they were raised for has since "
+                        f"been closed. Most recent: {plans[0].get('label')}, "
+                        f"{plans[0].get('status')}.")
             return ("No incident is open in this run. The agent opens one by itself the "
                     "moment coverage falls inside the threshold.")
         i0 = inc[0]
         return (f"{len(inc)} incident open. {i0.get('title') or i0.get('id')} — "
                 f"{i0.get('severity')}, currently {str(i0.get('status','')).replace('_',' ')}.")
 
-    # No route matched. Say what is known rather than apologising.
+    # No route matched. Say what is known rather than apologising — and say it in
+    # a way that cannot contradict the panels, which means every count that could
+    # look inconsistent arrives with the sentence that reconciles it.
     parts = [f"{len(inc)} open incident(s)", f"{len(plans)} recovery plan(s)",
              f"{len(rej)} recorded refusal(s)"]
+    if placed:
+        parts.append(f"{len(placed)} purchase order(s) placed, "
+                     f"₹{sum(float(p.get('total_value') or 0) for p in placed):,.0f} committed")
     if tight:
         parts.append(f"tightest cover {cover(tight[0]):.1f} days on "
                      f"{tight[0]['display_name']}")
+    tail = ""
+    if not inc and plans:
+        tail = (" The plan count is higher than the incident count because those incidents "
+                "have been closed — a plan outlives the incident that caused it.")
     return ("I do not have a model available to interpret that phrasing, so here is the "
-            "position it would have been answering from: " + ", ".join(parts) +
-            ". The tables below are the same figures.")
+            "position it would have been answering from: " + ", ".join(parts) + "." + tail +
+            " The tables below are the same figures.")
+
+
+def _ledger(state: dict) -> str:
+    """The handful of counts a wrong answer usually gets wrong, stated once.
+
+    Dumping raw state and hoping the model counts it correctly is how the
+    assistant ended up saying "0 open incidents" beside a table listing a plan.
+    Counting is cheap and deterministic here; the model's job is to interpret,
+    not to tally. Anything ambiguous is pre-reconciled in prose so the model has
+    no room to invent a reconciliation of its own.
+    """
+    inc = state.get("open_incidents") or []
+    plans = state.get("recent_plans") or []
+    placed = state.get("orders_placed") or []
+    shorts = state.get("shortages") or []
+    lines = [
+        f"open incidents: {len(inc)}",
+        f"recovery plans in this run: {len(plans)}",
+        f"purchase orders placed: {len(placed)} "
+        f"(₹{sum(float(p.get('total_value') or 0) for p in placed):,.0f} committed)",
+        f"decisions awaiting the human: {len(state.get('approvals_pending') or [])}",
+        f"questions the agent refused to guess: {len(state.get('questions_open') or [])}",
+        f"recorded refusals: {len(state.get('recent_rejections') or [])}",
+    ]
+    if not inc and plans:
+        lines.append("NOTE: plans outnumber open incidents because the incidents they "
+                     "were raised for have been closed. This is not a contradiction.")
+    for s in shorts[:3]:
+        net = max(0, int(s["shortfall"]) - int(s.get("inbound") or 0))
+        lines.append(
+            f"{s['component']} / {s['id']}: {s['required_units']} required + "
+            f"{s['safety_stock']} safety buffer − {s['on_hand']} on hand = "
+            f"{s['shortfall']} short; {s.get('inbound') or 0} already inbound before the "
+            f"deadline; NET STILL TO BUY = {net}"
+            + ("" if net else " (buying more would double-order)"))
+    return "\n".join(lines)
 
 
 async def answer_question(question: str, state: dict) -> tuple[str, bool]:
     """Conversational agent. Reads state; never mutates it."""
     fallback = deterministic_answer(question, state)
     prompt = (
-        "Current operational state:\n"
+        "COUNTS AND ARITHMETIC — these are computed, already correct, and must be used\n"
+        "verbatim. Never recount them from the state below, and never state a figure that\n"
+        "does not appear here or in the state:\n"
+        f"{_ledger(state)}\n\n"
+        "Full operational state:\n"
         f"{json.dumps(state, indent=2, default=str)[:4000]}\n\n"
         f"Question from the procurement manager: \"{question}\"\n\n"
-        "Answer in 2-4 short sentences using only the state above. If the state does not "
-        "contain the answer, say so plainly."
+        "Answer in 2-4 short sentences using only the material above. Rules:\n"
+        "- If a number needs explaining, show the arithmetic rather than asserting the\n"
+        "  result — 'short by 900' alone reads as a mistake; the three terms do not.\n"
+        "- Never say a component is not short without saying what is inbound, and never\n"
+        "  say it is short without saying whether anything is already covering it.\n"
+        "- If the state does not contain the answer, say so plainly. Do not estimate."
     )
     text = await _call(prompt, system=NARRATOR, max_tokens=400)
     return (text, True) if text else (fallback, False)

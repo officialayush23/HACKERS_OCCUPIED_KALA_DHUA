@@ -994,6 +994,149 @@ async def agent_verify(incident_id: str):
         return await agent.verify(conn, incident_id)
 
 
+@app.get("/api/recovery")
+async def recovery():
+    """The recovery plan, and how much of it has actually happened.
+
+    A plan that only exists as a row is a proposal. What makes it a *recovery* is
+    the trail behind it: an approval crossed or not needed, purchase orders
+    raised, suppliers who confirmed, stock that moved, a line that is covered
+    again. Until now that trail was scattered across five tables and four tabs,
+    which meant the single most important artefact the agent produces had nowhere
+    to be looked at whole.
+
+    Progress is derived, never stored. Every milestone below is a fact already
+    written by the path that did the work — nothing here can report a step as
+    done that did not happen, because nothing here writes anything.
+    """
+    pool = await db()
+    async with pool.acquire() as conn:
+        run_id = await _active_run_id(conn)
+        plans = await conn.fetch(
+            """select p.id, p.incident_id, p.status::text as status, p.option_kind,
+                      p.label, p.total_cost, p.score, p.rationale, p.requires_approval,
+                      p.payload, p.created_at, p.decided_at,
+                      i.status::text as incident_status, i.severity::text as severity,
+                      i.title as incident_title, i.component_id,
+                      c.display_name as component_name
+                 from recovery_plans p
+                 left join incidents i on i.id = p.incident_id
+                 left join components c on c.id = i.component_id
+                where ($1::bigint is null or p.scenario_run_id = $1)
+                order by p.id desc""", run_id)
+
+        out = []
+        for p in plans:
+            pos = await conn.fetch(
+                """select po.id, po.quantity, po.total_value, po.mode::text as mode,
+                          po.status::text as status, po.expected_delivery,
+                          coalesce(s.legal_name, s.name) as supplier
+                     from purchase_orders po
+                     left join suppliers s on s.id = po.supplier_id
+                    where po.incident_id = $1
+                    order by po.expected_delivery""", p["incident_id"])
+            appr = await conn.fetchrow(
+                """select id, status::text as status, estimated_cost, decided_by, decided_at
+                     from approvals where incident_id = $1
+                    order by id desc limit 1""", p["incident_id"])
+            tasks = await conn.fetch(
+                """select id, task_type, status::text as status, instructions
+                     from warehouse_tasks where incident_id = $1
+                    order by id""", p["incident_id"])
+
+            ordered = sum(int(r["quantity"] or 0) for r in pos)
+            landed = sum(int(r["quantity"] or 0) for r in pos if r["status"] == "delivered")
+            moving = sum(int(r["quantity"] or 0) for r in pos
+                         if r["status"] in ("in_transit", "delayed"))
+
+            # Still short, right now, for the component this plan is about. This
+            # is the only milestone that can un-complete itself, and it should:
+            # a delivered order that did not close the gap has not recovered the
+            # line, and saying otherwise would be the one lie this page could
+            # tell.
+            gap = await conn.fetchval(
+                """select coalesce(max(po.units_planned * po.component_per_unit
+                                       - i.usable_stock + i.safety_stock), 0)
+                     from production_orders po
+                     join inventory i on i.component_id = po.required_component
+                                     and i.warehouse_id = po.warehouse_id
+                    where po.required_component = $1 and not po.is_on_hold""",
+                p["component_id"]) if p["component_id"] else 0
+
+            def _m(key, label, state, detail):
+                return {"key": key, "label": label, "state": state, "detail": detail}
+
+            steps = [_m("planned", "Recovery plan produced", "done",
+                        f"{p['label']} — {p['option_kind']}, scored {p['score']}")]
+
+            if p["requires_approval"]:
+                st = (appr["status"] if appr else "pending")
+                steps.append(_m(
+                    "authority", "Cleared with a human",
+                    "done" if st == "approved" else
+                    "failed" if st in ("rejected", "expired") else "waiting",
+                    f"₹{float(p['total_cost'] or 0):,.0f} is past the ₹"
+                    f"{APPROVAL_THRESHOLD_INR:,} authority line — "
+                    + {"approved": f"approved by {appr['decided_by'] or 'you'}",
+                       "rejected": "rejected, so nothing was placed",
+                       "expired": "the approval expired unanswered",
+                       "pending": "still waiting for you"}.get(st, st)))
+            else:
+                steps.append(_m("authority", "Inside my authority", "done",
+                                f"₹{float(p['total_cost'] or 0):,.0f} is under the ₹"
+                                f"{APPROVAL_THRESHOLD_INR:,} line, so no approval was "
+                                f"needed and none was invented."))
+
+            steps.append(_m(
+                "ordered", "Purchase orders raised",
+                "done" if pos else "waiting",
+                f"{len(pos)} order(s), {ordered} units, ₹"
+                f"{sum(float(r['total_value'] or 0) for r in pos):,.0f}"
+                if pos else "Nothing has been placed against this plan yet."))
+
+            if tasks:
+                done_t = [t for t in tasks if t["status"] == "done"]
+                steps.append(_m(
+                    "floor", "Plant confirmed the physical count",
+                    "done" if len(done_t) == len(tasks) else "running",
+                    f"{len(done_t)} of {len(tasks)} warehouse task(s) closed."))
+
+            steps.append(_m(
+                "transit", "Stock moving",
+                "done" if landed and not moving else "running" if moving else "waiting",
+                f"{moving} units in transit, {landed} delivered."
+                if pos else "Nothing is moving yet."))
+
+            steps.append(_m(
+                "covered", "Line covered again",
+                "done" if gap is not None and int(gap) <= 0 else "waiting",
+                "No production order for this component is short any more."
+                if gap is not None and int(gap) <= 0
+                else f"Still {int(gap or 0)} units short on the worst line. "
+                     f"{landed} of {ordered} ordered units have landed."))
+
+            applicable = [s for s in steps if s["state"] != "skipped"]
+            done_n = len([s for s in applicable if s["state"] == "done"])
+            out.append({
+                "plan": {k: p[k] for k in (
+                    "id", "incident_id", "status", "option_kind", "label", "total_cost",
+                    "score", "rationale", "requires_approval", "created_at", "decided_at",
+                    "incident_status", "severity", "incident_title", "component_name")},
+                "steps": steps,
+                "progress": round(done_n / max(len(applicable), 1), 3),
+                "done_steps": done_n, "total_steps": len(applicable),
+                "blocked": any(s["state"] == "waiting" and s["key"] == "authority"
+                               for s in steps),
+                "failed": any(s["state"] == "failed" for s in steps),
+                "purchase_orders": [dict(r) for r in pos],
+                "warehouse_tasks": [dict(r) for r in tasks],
+                "units": {"ordered": ordered, "in_transit": moving, "delivered": landed,
+                          "still_short": int(gap or 0)},
+            })
+
+    return {"has_run": run_id is not None, "active_run_id": run_id, "recoveries": out}
+
+
 @app.post("/api/agent/ask")
 async def agent_ask(body: AskBody):
     """Conversational agent. Reads deterministic state; never mutates it."""
@@ -1034,12 +1177,51 @@ async def agent_ask(body: AskBody):
                 where event_type='OPTION_REJECTED' and sequence > $1
                 order by sequence desc limit 8""", floor)
         inv = await conn.fetch(
-            """select c.display_name, i.usable_stock, i.erp_stock, i.daily_usage
+            """select c.display_name, i.component_id, i.usable_stock, i.erp_stock,
+                      i.safety_stock, i.daily_usage
                  from inventory i join components c on c.id=i.component_id""")
+        # What the agent actually did with money. Without this the assistant
+        # could describe a plan but not answer "so what did you buy?" — the
+        # first thing anyone asks after watching it decide something.
+        placed = await conn.fetch(
+            """select p.id, p.quantity, p.unit_price, p.total_value, p.mode::text as mode,
+                      p.status::text as status, p.expected_delivery, p.created_by_agent,
+                      coalesce(s.legal_name, s.name) as supplier,
+                      c.display_name as component
+                 from purchase_orders p
+                 left join suppliers s on s.id = p.supplier_id
+                 left join components c on c.id = p.component_id
+                where p.created_at >= (select coalesce(max(started_at), 'epoch')
+                                         from scenario_runs
+                                        where ($1::bigint is null or id = $1))
+                order by p.created_at desc limit 12""", run_id)
+        # The shortage picture with its terms, so an answer can show the sum
+        # rather than assert a number the screen contradicts.
+        shortages = await conn.fetch(
+            """select po.id, po.oem_customer, po.deadline,
+                      c.display_name as component,
+                      po.units_planned * po.component_per_unit as required_units,
+                      i.usable_stock as on_hand, i.safety_stock,
+                      po.units_planned * po.component_per_unit
+                        - i.usable_stock + i.safety_stock as shortfall,
+                      coalesce((select sum(q.quantity) from purchase_orders q
+                                 where q.component_id = po.required_component
+                                   and q.status in ('open','in_transit')
+                                   and q.expected_delivery <= po.deadline), 0) as inbound
+                 from production_orders po
+                 join inventory i on i.component_id = po.required_component
+                                 and i.warehouse_id = po.warehouse_id
+                 join components c on c.id = po.required_component
+                where not po.is_on_hold
+                  and po.units_planned * po.component_per_unit
+                      - i.usable_stock + i.safety_stock > 0
+                order by shortfall desc limit 6""")
     state = {"open_incidents": [dict(r) for r in inc],
              "recent_plans": [dict(r) for r in plans],
              "recent_rejections": [r["human_summary"] for r in rejects],
              "inventory": [dict(r) for r in inv],
+             "orders_placed": [dict(r) for r in placed],
+             "shortages": [dict(r) for r in shortages],
              "approvals_pending": [dict(r) for r in approvals_pending],
              "questions_open": [dict(r) for r in questions_open]}
     answer, used_llm = await llm.answer_question(body.question, state)

@@ -39,6 +39,9 @@ export const api = {
   network:     ()          => req('/api/network'),
   now:         ()          => req('/api/now'),
   incidents:   ()          => req('/api/incidents'),
+  // The plan and how much of it has happened. Derived server-side from records
+  // the acting path already wrote — this endpoint reads, it never advances.
+  recovery:    ()          => req('/api/recovery'),
   audit:       (after = 0) => req(`/api/audit?after=${after}&limit=300`),
 
   // simulation

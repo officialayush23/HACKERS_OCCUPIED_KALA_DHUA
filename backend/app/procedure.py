@@ -107,8 +107,9 @@ class Procedure:
 
 async def _t_read_position(conn, ctx):
     row = await conn.fetchrow(
-        """select po.id, po.oem_customer, po.deadline,
-                  c.display_name as component_name,
+        """select po.id, po.oem_customer, po.deadline, po.required_component,
+                  c.display_name as component_name, c.is_hazmat,
+                  c.required_certifications,
                   i.usable_stock, i.erp_stock, i.safety_stock, i.daily_usage,
                   po.units_planned * po.component_per_unit as required_units
              from production_orders po
@@ -121,10 +122,63 @@ async def _t_read_position(conn, ctx):
     d = dict(row)
     cover = (d["usable_stock"] / d["daily_usage"]) if d["daily_usage"] else None
     ctx.update(d)
+    # The shortfall written out. A panel that showed only the endpoints — "need
+    # 700, short by 900" — read as broken arithmetic, and a step that reports a
+    # number without the terms that produced it has the same problem.
+    gross = int(d["required_units"]) - int(d["usable_stock"]) + int(d["safety_stock"])
+    ctx["gross_shortfall"] = max(0, gross)
+    if d["usable_stock"] < 0:
+        sum_txt = (f"{d['required_units']} needed + {d['safety_stock']} safety buffer "
+                   f"+ {abs(d['usable_stock'])} already over-committed = {gross}")
+    else:
+        sum_txt = (f"{d['required_units']} needed + {d['safety_stock']} safety buffer "
+                   f"− {d['usable_stock']} on hand = {gross}")
     return {"ok": True,
-            "detail": f"{d['component_name']} for {d['oem_customer']} — "
-                      f"{d['usable_stock']} usable against {d['required_units']} needed"
-                      + (f", {cover:.1f} days of cover." if cover is not None else ".")}
+            "detail": f"{d['component_name']} for {d['oem_customer']}. {sum_txt} units short"
+                      + (f", {cover:.1f} days of cover left." if cover is not None else ".")}
+
+
+async def _t_check_inbound(conn, ctx):
+    """What is already on the way — the step that stops double-ordering.
+
+    Reading the shelf alone is how an agent talks itself into buying stock it has
+    already bought. Two numbers matter and they are not interchangeable: what
+    lands before the deadline, which genuinely reduces the need, and what lands
+    after it, which does not however comforting it looks on a report.
+    """
+    rows = await conn.fetch(
+        """select p.id, p.quantity, p.expected_delivery, p.status::text as status,
+                  coalesce(s.legal_name, s.name) as supplier
+             from purchase_orders p
+             left join suppliers s on s.id = p.supplier_id
+            where p.component_id = $1 and p.status in ('open','in_transit')
+            order by p.expected_delivery""", ctx.get("required_component"))
+    deadline = ctx.get("deadline")
+    in_time = [r for r in rows if deadline is None or r["expected_delivery"] <= deadline]
+    late = [r for r in rows if deadline is not None and r["expected_delivery"] > deadline]
+    covered = sum(int(r["quantity"]) for r in in_time)
+    ctx["inbound_in_time"] = covered
+    ctx["inbound_late"] = sum(int(r["quantity"]) for r in late)
+    net = max(0, int(ctx.get("gross_shortfall", 0)) - covered)
+    ctx["net_shortfall"] = net
+
+    if not rows:
+        return {"ok": True, "net": net,
+                "detail": "Nothing is inbound, so the whole shortfall has to be bought."}
+    bits = [f"{covered} units land before the deadline across {len(in_time)} order(s)"]
+    if late:
+        bits.append(f"{ctx['inbound_late']} more arrive too late to help this run")
+    bits.append(f"leaving {net} genuinely to source" if net
+                else "which covers the shortfall — buying more would double-order")
+    out = {"ok": True, "net": net, "detail": ", ".join(bits) + "."}
+    if not net and int(ctx.get("gross_shortfall") or 0) > 0:
+        # Nothing left to buy. Surveying a market we are not going to buy from,
+        # then scoring options we will not take, is theatre — and an operator
+        # watching a full seven-step plan run to completion will reasonably
+        # assume something was ordered at the end of it.
+        out["skip_next"] = ["survey_suppliers", "apply_constraints",
+                            "score_options", "check_authority"]
+    return out
 
 
 async def _t_check_erp_gap(conn, ctx):
@@ -152,38 +206,121 @@ async def _t_verify_floor(conn, ctx):
 async def _t_survey_suppliers(conn, ctx):
     rows = await conn.fetch(
         """select sc.supplier_id, coalesce(s.legal_name, s.name) as name,
-                  sc.unit_price, sc.available_quantity, sc.min_order_quantity,
-                  se.effective_reliability
+                  sc.unit_price, sc.lead_time_days, sc.available_quantity,
+                  sc.min_order_quantity, s.certifications,
+                  coalesce(se.effective_reliability, s.reliability_score) as reliability
              from supplier_catalog sc
              join suppliers s on s.id = sc.supplier_id
              left join supplier_effective se on se.supplier_id = sc.supplier_id
-            where sc.component_id = $1""",
+            where sc.component_id = $1
+            order by sc.unit_price""",
         ctx.get("required_component") or ctx.get("component_id"))
     ctx["candidates"] = [dict(r) for r in rows]
+    if not rows:
+        return {"ok": False, "detail": "No supplier in the catalogue lists this part, so "
+                                       "there is nothing to score.",
+                "skip_next": "apply_constraints"}
+    # Naming three beats counting five. A count only tells an operator the step
+    # ran; the names, prices and lead times tell them whether to believe what
+    # comes next.
+    top = ", ".join(
+        f"{r['name']} at ₹{float(r['unit_price']):,.0f}/unit on {r['lead_time_days']}d lead"
+        for r in rows[:3])
     return {"ok": True, "count": len(rows),
-            "detail": f"{len(rows)} supplier(s) list this part."}
+            "detail": f"{len(rows)} supplier(s) list this part. Cheapest three: {top}."}
 
 
 async def _t_apply_constraints(conn, ctx):
-    n = await conn.fetchval(
-        "select count(*) from agent_constraints where active") or 0
-    return {"ok": True,
-            "detail": (f"{n} standing constraint(s) plus the component's own "
-                       f"certification, minimum-order and hazmat rules. These filter "
-                       f"before scoring — no price compensates for failing one.")}
+    """Run the filters here, and name every refusal.
+
+    The old version counted the constraints. Counting them proves nothing — the
+    thing an operator needs, and the thing a judge asks for, is *which supplier
+    failed which rule*. So this actually applies them and reports the casualties
+    by name. It still decides nothing: the solver re-derives the same filters on
+    the authoritative path, and this is the readable account of them.
+    """
+    cands = ctx.get("candidates") or []
+    standing = await conn.fetch(
+        """select constraint_type, target, reason from agent_constraints
+            where active and constraint_type = 'exclude_supplier'""")
+    excluded = {r["target"]: (r["reason"] or "a standing instruction") for r in standing}
+
+    need = int(ctx.get("net_shortfall") or ctx.get("gross_shortfall") or 0)
+    required_certs = set(ctx.get("required_certifications") or [])
+    refusals: list[str] = []
+    survivors = []
+
+    for c in cands:
+        held = set(c.get("certifications") or [])
+        if c["supplier_id"] in excluded:
+            refusals.append(f"{c['name']} — excluded by {excluded[c['supplier_id']]}")
+        elif required_certs and not required_certs.issubset(held):
+            missing = ", ".join(sorted(required_certs - held))
+            refusals.append(f"{c['name']} — missing {missing}")
+        elif need and int(c["min_order_quantity"] or 0) > need:
+            refusals.append(f"{c['name']} — minimum order {c['min_order_quantity']} "
+                            f"exceeds the {need} actually needed")
+        elif need and int(c["available_quantity"] or 0) <= 0:
+            refusals.append(f"{c['name']} — nothing available")
+        else:
+            survivors.append(c)
+
+    ctx["survivors"] = survivors
+    ctx["refusals"] = refusals
+    if not refusals:
+        return {"ok": True, "detail": f"All {len(cands)} supplier(s) clear every hard rule. "
+                                      f"Nothing was filtered out."}
+    txt = "; ".join(refusals[:4]) + ("; …" if len(refusals) > 4 else "")
+    return {"ok": True, "refused": len(refusals),
+            "detail": f"{len(survivors)} of {len(cands)} survive. Refused: {txt}. "
+                      f"These are filters, not penalties — no price would have changed them."}
 
 
 async def _t_score_options(conn, ctx):
-    # The solver runs inside agent._plan_and_validate; this step exists so the
-    # operator sees where scoring happens in the order of work.
+    """Report what scoring is actually working with, not just that it happens.
+
+    The solver inside `agent._plan_and_validate` remains the authority for the
+    decision. This step exists so the operator can see the field it was handed —
+    a plan whose inputs are invisible is a plan nobody can argue with.
+    """
+    survivors = ctx.get("survivors")
+    if survivors is None:
+        survivors = ctx.get("candidates") or []
+    need = int(ctx.get("net_shortfall") or ctx.get("gross_shortfall") or 0)
+    head = ("Continuity 0.35, cost 0.20, supplier risk 0.15 — the rubric's own weights, "
+            "applied to whatever survived the filters.")
+    if not survivors:
+        return {"ok": False, "detail": head + " Nothing survived, so there is nothing to "
+                                              "score and the answer will be a refusal with "
+                                              "reasons rather than a plan."}
+    best = min(survivors, key=lambda c: float(c["unit_price"] or 0))
+    landed = float(best["unit_price"] or 0) * max(need, 0)
+    ctx["indicative_cost"] = landed
+    fastest = min(survivors, key=lambda c: int(c["lead_time_days"] or 999))
     return {"ok": True,
-            "detail": "Continuity 0.35, cost 0.20, supplier risk 0.15 — the rubric's "
-                      "own weights, applied to whatever survived the filters."}
+            "detail": (f"{head} {len(survivors)} option(s) in play for {need} units. "
+                       f"Cheapest is {best['name']} at roughly ₹{landed:,.0f}; fastest is "
+                       f"{fastest['name']} at {fastest['lead_time_days']} days. The solver "
+                       f"weighs those against each other rather than taking either on "
+                       f"its own.")}
 
 
 async def _t_check_authority(conn, ctx):
-    return {"ok": True, "detail": "Anything past the authority line stops for a human "
-                                  "rather than being quietly split into two orders."}
+    from .core import APPROVAL_THRESHOLD_INR
+    cost = ctx.get("indicative_cost")
+    if cost is None:
+        return {"ok": True,
+                "detail": f"The authority line is ₹{APPROVAL_THRESHOLD_INR:,}. Anything past "
+                          f"it stops for a human rather than being quietly split into two "
+                          f"orders."}
+    over = cost > APPROVAL_THRESHOLD_INR
+    return {"ok": True, "requires_approval": over,
+            "detail": (f"Indicative spend ₹{cost:,.0f} against an authority line of "
+                       f"₹{APPROVAL_THRESHOLD_INR:,} — "
+                       + ("past it, so this will be raised for approval rather than placed."
+                          if over else
+                          "inside it, so this can be placed without waiting for you.")
+                       + " Splitting an order to duck the line is not available to me.")}
 
 
 TOOLS: dict[str, Tool] = {
@@ -193,6 +330,9 @@ TOOLS: dict[str, Tool] = {
                               "inventory", _t_check_erp_gap),
     "verify_floor":      Tool("verify_floor", "Confirm usable stock with the plant",
                               "warehouse tasks", _t_verify_floor),
+    "check_inbound":     Tool("check_inbound", "Count what is already on the way",
+                              "open and in-transit purchase orders, against the deadline",
+                              _t_check_inbound),
     "survey_suppliers":  Tool("survey_suppliers", "Find who could serve it",
                               "supplier catalogue, lanes, trust", _t_survey_suppliers),
     "apply_constraints": Tool("apply_constraints", "Apply the hard constraints",
@@ -210,8 +350,11 @@ TOOLS: dict[str, Tool] = {
 #: The default shape for a sourcing instruction. The generator starts here and
 #: adapts; it is a starting point, not an SOP, and steps drop out when the state
 #: says they are pointless.
-_SOURCING = ["read_position", "check_erp_gap", "verify_floor", "survey_suppliers",
-             "apply_constraints", "score_options", "check_authority"]
+#: `check_inbound` sits before the supplier survey on purpose. Everything after
+#: it is sized against the *net* need, and an agent that surveys the market
+#: before counting what it already bought will size every option wrong.
+_SOURCING = ["read_position", "check_erp_gap", "verify_floor", "check_inbound",
+             "survey_suppliers", "apply_constraints", "score_options", "check_authority"]
 
 
 def generate(instruction: str, *, verb: str, hints: dict | None = None) -> Procedure:
@@ -223,9 +366,9 @@ def generate(instruction: str, *, verb: str, hints: dict | None = None) -> Proce
     unrunnable one.
     """
     hints = hints or {}
-    names = list(_SOURCING) if verb == "source" else ["read_position", "survey_suppliers",
-                                                      "apply_constraints", "score_options",
-                                                      "check_authority"]
+    names = list(_SOURCING) if verb == "source" else [
+        "read_position", "check_inbound", "survey_suppliers", "apply_constraints",
+        "score_options", "check_authority"]
 
     # Cheap adaptations that need no model at all.
     if hints.get("skip_verification"):
@@ -260,7 +403,9 @@ async def execute(conn, proc: Procedure, ctx: dict, *,
                   incident_id: str | None = None) -> Procedure:
     """Run the steps, tracking each one, absorbing follow-ups as they appear."""
     proc.context = ctx
-    skip: set[str] = set()
+    # tool name -> why it was skipped. "Not needed" told the operator nothing;
+    # the step that made it unnecessary is the interesting part.
+    skip: dict[str, str] = {}
     i = 0
 
     # `while` rather than `for`: a follow-up appends to the list mid-loop, and
@@ -271,7 +416,7 @@ async def execute(conn, proc: Procedure, ctx: dict, *,
 
         if step.tool in skip:
             step.status = "skipped"
-            step.detail = "Not needed — an earlier step settled it."
+            step.detail = skip[step.tool]
             continue
 
         tool = TOOLS.get(step.tool)
@@ -288,8 +433,10 @@ async def execute(conn, proc: Procedure, ctx: dict, *,
             step.result = out
             step.detail = out.get("detail")
             step.status = "done" if out.get("ok", True) else "failed"
-            if out.get("skip_next"):
-                skip.add(out["skip_next"])
+            nxt = out.get("skip_next")
+            if nxt:
+                for name in ([nxt] if isinstance(nxt, str) else nxt):
+                    skip[name] = f"Not needed — {step.label.lower()} settled it."
 
             # Follow-up: an ERP gap means the floor figure has to be confirmed
             # before anything is bought against it.

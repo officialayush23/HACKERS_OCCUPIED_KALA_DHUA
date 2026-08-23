@@ -10,6 +10,7 @@ import IncidentPanel from '@/components/IncidentPanel'
 import Communications from '@/components/Communications'
 import WarehouseOps from '@/components/WarehouseOps'
 import Approvals from '@/components/Approvals'
+import Recovery from '@/components/Recovery'
 import NetworkFlow from '@/components/NetworkFlow'
 import WorldState from '@/components/WorldState'
 import DecisionExplorer from '@/components/DecisionExplorer'
@@ -102,6 +103,7 @@ const SUBTITLE = {
   command:   'What needs you, what is happening, and what the agent is doing about it',
   network:   'Supplier lanes, live shipments and contradictions',
   incidents: 'Everything the agent is holding',
+  recovery:  'The plan the agent produced, and how much of it has actually happened',
   decisions: 'What the solver chose, and everything it refused',
   approvals: 'Only what crosses the agent\u2019s authority reaches you',
   audit:     'Every action the agent took, and the evidence behind it',
@@ -199,7 +201,8 @@ function Overview({ events, revision, onGoto, onRunSim }) {
 
           {/* the chain, in one line of plain arithmetic */}
           {order && (
-            <div className="glass flex items-center gap-5 rounded-xl px-6 py-5">
+            <div className="glass rounded-xl px-6 py-5">
+              <div className="flex items-center gap-5">
               {[
                 // Below zero means other orders have already claimed more than
                 // exists. "-50 usable" is not a quantity anyone can picture;
@@ -211,6 +214,11 @@ function Overview({ events, revision, onGoto, onRunSim }) {
                    ? `over-committed by ${Math.abs(order.available)}`
                    : 'net of other runs\u2019 claims'],
                 ['need', `${order.required_units} units`, order.component_name],
+                // The buffer is the whole reason "short by" is bigger than
+                // "need minus have". Leaving it out is what made this strip read
+                // as broken arithmetic. It is a real number the solver sources
+                // against, so it gets its own column.
+                ['+ buffer', `${order.safety_stock ?? 0}`, 'safety stock to rebuild'],
                 ['short by', `${order.shortfall}`,
                  incident ? 'agent is recovering this' : 'agent is waking up'],
               ].map(([k, v, sub], i) => (
@@ -225,6 +233,28 @@ function Overview({ events, revision, onGoto, onRunSim }) {
                   </div>
                 </div>
               ))}
+              </div>
+
+              {/* The sum, written out. A planner who cannot reproduce a number
+                  will not trust the plan built on it, and "need 700, short by
+                  900" is not reproducible without seeing all three terms. */}
+              <div className="text-muted-foreground mt-4 border-t pt-3 font-mono
+                              text-[11px] leading-relaxed tabular-nums">
+                {order.required_units} needed
+                {' + '}{order.safety_stock ?? 0} buffer
+                {order.available < 0
+                  ? ` + ${Math.abs(order.available)} already over-committed`
+                  : ` − ${order.available} on hand`}
+                {' = '}
+                <span className="text-danger">{order.shortfall} to source</span>
+                {order.available < 0 && (
+                  <span className="mt-1 block font-sans opacity-80">
+                    On hand is below zero because other production orders have already
+                    claimed {Math.abs(order.available)} units more than the floor holds.
+                    Those claims have to be bought back before this line is covered.
+                  </span>
+                )}
+              </div>
             </div>
           )}
 
@@ -389,6 +419,7 @@ export default function App() {
               </div>
             )}
 
+            {page === 'recovery' && <Recovery />}
             {page === 'approvals' && <Approvals revision={revision} onGoto={setPage} />}
             {page === 'comms' && <Communications revision={revision} />}
             {page === 'warehouse' && <WarehouseOps revision={revision} />}

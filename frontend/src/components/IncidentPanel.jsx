@@ -26,6 +26,12 @@ const STATUS_COPY = {
 export default function IncidentPanel({ revision, onOpenDecision }) {
   const { data, isLoading } = useQuery({
     queryKey: ['incidents'], queryFn: api.incidents})
+  // `/api/now` is the one place that decides whether production is at risk.
+  // This panel used to answer that question for itself off the incident list,
+  // which is why it could print "no production order is short" underneath a
+  // headline naming the order that was short: an incident can be closed, or
+  // belong to another run, while the shelf is still empty.
+  const { data: now } = useQuery({ queryKey: ['now'], queryFn: api.now })
 
   const open = (data?.incidents ?? []).filter(
     (i) => !['resolved', 'failed'].includes(i.status))
@@ -40,17 +46,37 @@ export default function IncidentPanel({ revision, onOpenDecision }) {
     <Skeleton className="h-16 w-full" /></div>
 
   if (!top) {
+    // No open incident is not the same claim as no shortage, and saying the
+    // second when only the first was checked is how this panel ended up
+    // contradicting the headline above it. Ask `/api/now`, then say only what
+    // it actually reports.
+    const stillShort = now?.production_at_risk === true
+    const worst = now?.worst
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
-        <div className="bg-ok/10 ring-ok/25 flex size-11 items-center justify-center
-                        rounded-full ring-1">
-          <Package className="text-ok size-5" />
+        <div className={`flex size-11 items-center justify-center rounded-full ring-1
+          ${stillShort ? 'bg-warn/10 ring-warn/25' : 'bg-ok/10 ring-ok/25'}`}>
+          <Package className={stillShort ? 'text-warn size-5' : 'text-ok size-5'} />
         </div>
-        <p className="text-[14px] font-medium">All lines are covered</p>
-        <p className="text-muted-foreground max-w-[15rem] text-[12px] leading-relaxed">
-          No production order is short. The agent is monitoring inbound shipments and
-          supplier messages.
-        </p>
+        {stillShort ? (
+          <>
+            <p className="text-[14px] font-medium">No incident open for this shortage</p>
+            <p className="text-muted-foreground max-w-[16rem] text-[12px] leading-relaxed">
+              {worst?.component_name ?? 'A component'} is still short
+              {worst?.shortfall != null && ` ${worst.shortfall} units`}, but no incident
+              is open against it in this run — either it was closed, or it belongs to a
+              run that has been reset away. Nothing is being planned for it right now.
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="text-[14px] font-medium">All lines are covered</p>
+            <p className="text-muted-foreground max-w-[15rem] text-[12px] leading-relaxed">
+              No production order is short. The agent is monitoring inbound shipments and
+              supplier messages.
+            </p>
+          </>
+        )}
       </div>
     )
   }

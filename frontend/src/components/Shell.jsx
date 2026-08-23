@@ -1,7 +1,7 @@
 import { motion } from 'motion/react'
 import {
   Activity, Boxes, CheckCircle2, ClipboardCheck, Gauge, GitBranch, HelpCircle,
-  LayoutGrid, MessageSquare, ScrollText, Sparkles,
+  LayoutGrid, MessageSquare, PackageCheck, ScrollText, Sparkles,
   Moon, Scale, Sun, TriangleAlert, Warehouse,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -20,6 +20,10 @@ export const NAV_GROUPS = [
     items: [
       { id: 'command',   label: 'Overview',   icon: LayoutGrid,    sub: 'what needs you now' },
       { id: 'incidents', label: 'Incidents',  icon: TriangleAlert, sub: 'open & resolved' },
+      // The recovery plan is the agent's actual output. It sat scattered across
+      // four tabs until it got its own, which meant the most important thing on
+      // the screen was the one thing nobody could look at whole.
+      { id: 'recovery',  label: 'Recovery',   icon: PackageCheck,  sub: 'the plan & progress' },
       { id: 'network',   label: 'Network',    icon: GitBranch,     sub: 'lanes & shipments' },
     ],
   },
