@@ -1,7 +1,7 @@
 import { motion } from 'motion/react'
 import {
   Activity, Boxes, CheckCircle2, ClipboardCheck, Gauge, GitBranch, HelpCircle,
-  LayoutGrid, MessageSquare, ScrollText,
+  LayoutGrid, MessageSquare, ScrollText, Sparkles,
   Moon, Scale, Sun, TriangleAlert, Warehouse,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -30,6 +30,7 @@ export const NAV_GROUPS = [
       { id: 'comms',     label: 'Conversations',  icon: MessageSquare, sub: 'suppliers & warehouse' },
       { id: 'approvals', label: 'Approvals',      icon: CheckCircle2,  sub: 'over its authority' },
       { id: 'questions', label: 'Questions',      icon: HelpCircle,    sub: 'it refused to guess' },
+      { id: 'chat',      label: 'Ask the agent',  icon: Sparkles,      sub: 'about this run' },
     ],
   },
   {

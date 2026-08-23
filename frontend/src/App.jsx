@@ -19,6 +19,7 @@ import Accuracy from '@/components/Accuracy'
 import NoRun from '@/components/NoRun'
 import Evaluation from '@/components/Evaluation'
 import HumanInput from '@/components/HumanInput'
+import Chat from '@/components/Chat'
 import AuditPage from '@/components/AuditPage'
 import NowBar from '@/components/NowBar'
 import BusyBar from '@/components/BusyBar'
@@ -108,6 +109,7 @@ const SUBTITLE = {
   scoring:   'Runs scored against the judges\u2019 own formula',
   evaluation:'Did this run pass \u2014 criterion by criterion, with the evidence',
   questions: 'Decisions the agent refused to make, and why it refused them',
+  chat:      'Ask about this run \u2014 it reads the live state and changes nothing',
   auditlog:  'Every event, every actor, every run \u2014 append-only',
   warehouse: 'Physical reality at Pune Plant',
 }
@@ -171,9 +173,11 @@ function Overview({ events, revision, onGoto, onRunSim }) {
                 {order?.component_name ?? incident?.component_name} shortage
               </h2>
               <p className="text-muted-foreground mt-2 text-[14px] leading-relaxed">
-                {cover != null
-                  ? `Production stops in ${cover.toFixed(1)} days unless this is recovered.`
-                  : 'Assessing production impact.'}
+                {cover == null
+                  ? 'Assessing production impact.'
+                  : cover <= 0
+                    ? 'The line has already run out — every hour from here is lost output.'
+                    : `Production stops in ${cover.toFixed(1)} days unless this is recovered.`}
                 {order && ` ${order.product_name ?? order.id} for ${order.oem_customer}.`}
               </p>
             </div>
@@ -197,7 +201,15 @@ function Overview({ events, revision, onGoto, onRunSim }) {
           {order && (
             <div className="glass flex items-center gap-5 rounded-xl px-6 py-5">
               {[
-                ['have', `${order.available} usable`, 'net of other runs\u2019 claims'],
+                // Below zero means other orders have already claimed more than
+                // exists. "-50 usable" is not a quantity anyone can picture;
+                // "nothing left" plus the over-commitment is the same fact said
+                // in a way a planner can act on.
+                ['have',
+                 order.available < 0 ? 'nothing left' : `${order.available} usable`,
+                 order.available < 0
+                   ? `over-committed by ${Math.abs(order.available)}`
+                   : 'net of other runs\u2019 claims'],
                 ['need', `${order.required_units} units`, order.component_name],
                 ['short by', `${order.shortfall}`,
                  incident ? 'agent is recovering this' : 'agent is waking up'],
@@ -377,7 +389,7 @@ export default function App() {
               </div>
             )}
 
-            {page === 'approvals' && <Approvals revision={revision} />}
+            {page === 'approvals' && <Approvals revision={revision} onGoto={setPage} />}
             {page === 'comms' && <Communications revision={revision} />}
             {page === 'warehouse' && <WarehouseOps revision={revision} />}
 
@@ -399,6 +411,8 @@ export default function App() {
             )}
 
             {page === 'questions' && <HumanInput />}
+
+            {page === 'chat' && <Chat />}
 
             {page === 'auditlog' && <AuditPage />}
            </ErrorBoundary>

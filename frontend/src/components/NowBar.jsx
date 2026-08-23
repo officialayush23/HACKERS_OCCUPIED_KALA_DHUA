@@ -85,7 +85,17 @@ export default function NowBar({ onGoto }) {
 
       {needsHuman.length > 0 ? (
         <Item icon={TriangleAlert} tone="text-danger" pulse
-              value={`${needsHuman.length} decision${needsHuman.length > 1 ? 's' : ''} waiting on you`}
+              value={(() => {
+                // Naming the kind matters. "2 decisions waiting on you" sent
+                // people to Approvals, found it empty, and read as the app
+                // contradicting itself — when in fact both were questions the
+                // agent refused to answer, which live on a different screen.
+                const q = needsHuman.filter((x) => x.kind === 'question').length
+                const a = needsHuman.length - q
+                if (q && !a) return `${q} question${q > 1 ? 's' : ''} for you`
+                if (a && !q) return `${a} approval${a > 1 ? 's' : ''} waiting on you`
+                return `${a} approval${a > 1 ? 's' : ''} and ${q} question${q > 1 ? 's' : ''}`
+              })()}
               sub={needsHuman[0].title}
               onClick={() => onGoto(
                 needsHuman[0].kind === 'question' ? 'questions' : 'approvals')} />
@@ -111,7 +121,11 @@ export default function NowBar({ onGoto }) {
       <Item icon={Clock}
             tone={cover != null && cover < 3 ? 'text-danger'
                   : cover != null && cover < 6 ? 'text-warn' : ''}
-            value={cover != null ? `${cover.toFixed(1)} days of cover` : 'Cover unknown'}
+            value={cover == null ? 'Cover unknown'
+                   // A negative day count is arithmetic leaking onto the screen.
+                   // Below zero the line is not "about to stop", it has stopped.
+                   : cover <= 0 ? 'Out of stock now'
+                   : `${cover.toFixed(1)} days of cover`}
             sub={atRisk ? `${worst?.component_name ?? 'component'} \u2014 short ${worst?.shortfall ?? 0}`
                  : critical > 0 ? `${critical} critical incident open`
                  : 'tightest component'} />

@@ -120,6 +120,7 @@ export default function SimulationDrawer({ open, onOpenChange }) {
   // from there.
   const run = useMutation({
     mutationFn: api.inject,
+    meta: { toast: (r) => `Running \u201c${r?.title ?? r?.scenario_id ?? 'scenario'}\u201d \u2014 events are landing now` },
     onSuccess: async () => {
       setError(null)
       await qc.invalidateQueries({
@@ -134,11 +135,14 @@ export default function SimulationDrawer({ open, onOpenChange }) {
     },
     onError: fail,
   })
-  const reset = useMutation({ mutationFn: api.reset, onSuccess: done, onError: fail })
+  const reset = useMutation({
+    mutationFn: api.reset, onSuccess: done, onError: fail,
+    meta: { toast: 'World re-seeded. Past runs and their scores survive.' } })
   // A clean backend behind a stale React cache still shows ghosts, so the hard
   // reset clears both.
   const wipe = useMutation({
     mutationFn: api.hardReset,
+    meta: { toast: 'Everything cleared \u2014 no run, no incidents, no decisions, no logs, no score.' },
     onSuccess: () => { setError(null); qc.clear(); refresh(qc, 'simulation') },
     onError: fail,
   })

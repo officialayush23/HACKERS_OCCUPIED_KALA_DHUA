@@ -21,7 +21,7 @@ import { Separator } from '@/components/ui/separator'
  *            plan for this incident. Human feedback changes agent state, it does
  *            not sit in a comment box.
  */
-export default function Approvals({ revision }) {
+export default function Approvals({ revision, onGoto }) {
   const qc = useQueryClient()
   const [modifying, setModifying] = useState(null)
   const [exclude, setExclude] = useState('')
@@ -34,8 +34,13 @@ export default function Approvals({ revision }) {
     // Decide the approval row itself. The old call only resumed the agent and
     // left the approval sitting on `pending`, so the screen never changed.
     mutationFn: ({ id, body }) => api.decide(id, body),
+    meta: { toast: (r) => r?.summary
+      ?? 'Decision recorded. The agent has picked the work back up.' },
     onSuccess: () => { setModifying(null); setExclude(''); setNote(''); refresh(qc, 'decision') },
   })
+
+  const { data: nowData } = useQuery({ queryKey: ['now'], queryFn: api.now })
+  const questions = (nowData?.queue ?? []).filter((q) => q.kind === 'question').length
 
   const list = data?.approvals ?? []
   const pending = list.filter((a) => a.status === 'pending')
@@ -55,6 +60,20 @@ export default function Approvals({ revision }) {
               recovery crosses that authority, delays another customer's order, or has no
               safe option.
             </p>
+            {/* The strip above counts approvals AND questions. Landing here on an
+                empty page after being told two things need you reads as a bug.
+                It is not — they are on a different screen, and this says so. */}
+            {questions > 0 && (
+              <p className="text-muted-foreground mt-3 max-w-sm text-[12.5px] leading-relaxed">
+                {questions} thing{questions > 1 ? 's' : ''} still need{questions > 1 ? '' : 's'} you,
+                but {questions > 1 ? 'they are' : 'it is'} a different kind of ask — the agent
+                refused to guess rather than deciding and holding.{' '}
+                <button onClick={() => onGoto?.('questions')}
+                        className="text-primary underline underline-offset-2">
+                  Answer {questions > 1 ? 'them' : 'it'} on Questions →
+                </button>
+              </p>
+            )}
           </div>
         )}
 

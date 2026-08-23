@@ -430,6 +430,7 @@ export default function SupplierPortal({ supplierId }) {
 
   const reply = useMutation({
     mutationFn: (b) => api.supplierReply(supplierId, b),
+    meta: { toast: 'Sent to NEXA. Watch their dashboard \u2014 the agent reads it as prose.' },
     onSuccess: (r) => done(r.interpretation?.needs_human
       ? 'Sent. The buyer’s agent read it and could not act on it — it has asked a '
         + 'human what to do rather than guessing.'
@@ -438,6 +439,7 @@ export default function SupplierPortal({ supplierId }) {
   })
   const claim = useMutation({
     mutationFn: (b) => api.supplierClaim(supplierId, b),
+    meta: { toast: 'Claim sent. The buyer\u2019s agent will check it against carrier tracking.' },
     onSuccess: (r) => done(r.summary ?? 'Claim recorded.'),
     onError: (e) => setReceipt(`Could not send — ${e.message}`),
   })

@@ -3,7 +3,7 @@
 `TASKS.md` is the original build plan. **This file is the working state**: what is
 done, what is broken, what is next, and what we know about why.
 
-Last updated: 23 Aug 2026, after the S2 run.
+Last updated: 23 Aug 2026, 04:30.
 
 ---
 
@@ -67,11 +67,24 @@ being absent, or the socket itself. The socket was always working.
 
 ---
 
-## 2. Open — blocking a clean demo
+### Also fixed since
 
-- [ ] **Approvals tab blanks the page.** The `ErrorBoundary` will now name the
-      throw instead of whiting out. Run it, read the error, fix. Suspect
-      `a.plan` arriving as a JSON *string* from asyncpg rather than a dict.
+- [x] **Questions page crash** — the agent's options are objects
+      `{id, label, detail, effect}` and the page rendered them straight as React
+      children. Now rendered as choice cards showing what each option *does*.
+      (This was the blank page; the boundary caught it and named it.)
+- [x] **"2 decisions" vs "3 needs you" vs an empty Approvals page** — not a data
+      bug. The strip counted approvals *and* questions under one word. It now
+      names the kind, and the Approvals empty state links to Questions.
+- [x] **Negative cover / `-50 usable`** — below zero the line has already
+      stopped; it now says so, and over-commitment is stated rather than shown
+      as a negative quantity.
+- [x] **Sonner toasts on every mutation**, wired at the `MutationCache` so no
+      future write can forget one. `meta.toast` customises, `meta.silent` opts out.
+- [x] **Dedicated chat page** (`Ask the agent`) — multi-turn, with the
+      deterministic cards and tables under each reply.
+
+## 2. Open — blocking a clean demo
 - [ ] **`A recovery plan was produced` fails while the run passes 9/10.** The
       S2 evaluation says no plan was produced, but the Decision Log shows one.
       Either `recovery_plans.scenario_run_id` is not being stamped, or the plan

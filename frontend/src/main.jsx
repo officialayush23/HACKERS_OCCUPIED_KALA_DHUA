@@ -1,6 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import Root from './Root.jsx'
 import { hydrate, persist } from './lib/persist.js'
 import './index.css'
@@ -22,7 +23,33 @@ try {
 // keys times a dozen panels produced the request storm in the server log, and
 // every one of those responses re-rendered the page. 12s catches a dropped
 // socket without the app talking to itself.
+/** What a mutation says when it lands. `meta.toast` overrides; `meta.silent` opts out. */
+function toastFor(mutation, data) {
+  const meta = mutation?.options?.meta ?? {}
+  if (meta.silent) return null
+  if (typeof meta.toast === 'function') return meta.toast(data)
+  if (meta.toast) return meta.toast
+  // Fall back to whatever the endpoint said about itself before inventing a
+  // sentence — the server usually knows better than we do here.
+  return data?.summary || data?.message || 'Done'
+}
+
 const queryClient = new QueryClient({
+  // Every write confirms itself. Silence after clicking a button is how people
+  // end up clicking it twice, and how a failed write looks exactly like a
+  // successful one.
+  mutationCache: new MutationCache({
+    onSuccess: (data, _vars, _ctx, mutation) => {
+      const msg = toastFor(mutation, data)
+      if (msg) toast.success(msg)
+    },
+    onError: (error, _vars, _ctx, mutation) => {
+      if (mutation?.options?.meta?.silent) return
+      toast.error(String(error?.message || error), {
+        description: 'Nothing was changed. The server rejected the request.',
+      })
+    },
+  }),
   defaultOptions: {
     queries: {
       staleTime: 1500,

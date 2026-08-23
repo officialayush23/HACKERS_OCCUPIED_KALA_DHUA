@@ -112,13 +112,40 @@ function Request({ req, onResolve, pending }) {
         <div className="text-muted-foreground mb-3 text-[10px] font-medium
                         tracking-[0.12em] uppercase">What should it do?</div>
 
-        <div className="flex flex-wrap gap-2">
-          {options.map((o) => (
-            <Button key={o} variant={chosen === o ? 'default' : 'outline'}
-                    onClick={() => setChosen(o)} className="h-9 text-[12.5px]">
-              {o}
-            </Button>
-          ))}
+        {/* An option is an object — {id, label, detail, effect} — because every
+            choice has to say what it will DO, not just what it is called.
+            Rendering the object itself threw and took the whole page with it. */}
+        <div className="flex flex-col gap-2">
+          {options.map((raw, i) => {
+            const o = typeof raw === 'string'
+              ? { id: raw, label: raw }
+              : (raw ?? {})
+            const id = o.id ?? o.label ?? String(i)
+            const on = chosen === id
+            return (
+              <button key={id} onClick={() => setChosen(id)}
+                      className={`rounded-xl border px-4 py-3 text-left transition-colors
+                        ${on ? 'border-primary/50 bg-primary/[0.07]'
+                             : 'hover:bg-accent/40'}`}>
+                <div className="flex items-center gap-2">
+                  <span className={`size-3.5 shrink-0 rounded-full border ${
+                    on ? 'border-primary bg-primary' : 'border-muted-foreground/40'}`} />
+                  <span className="text-[13.5px] font-medium">{o.label ?? id}</span>
+                </div>
+                {o.detail && (
+                  <p className="text-muted-foreground mt-1.5 pl-5.5 text-[12px]
+                                leading-relaxed">{o.detail}</p>
+                )}
+                {o.effect && (
+                  <p className="text-muted-foreground/80 mt-1 pl-5.5 text-[11.5px]
+                                leading-relaxed">
+                    <span className="text-muted-foreground/60">what this does — </span>
+                    {o.effect}
+                  </p>
+                )}
+              </button>
+            )
+          })}
         </div>
 
         <Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)}
@@ -129,7 +156,9 @@ function Request({ req, onResolve, pending }) {
                 onClick={() => onResolve(req, chosen, note)}
                 className="mt-5 h-11">
           {pending && <Loader2 className="size-4 animate-spin" />}
-          {chosen ? `Answer — ${chosen}` : 'Choose an answer'}
+          {chosen
+            ? `Answer — ${options.find((o) => (o?.id ?? o) === chosen)?.label ?? chosen}`
+            : 'Choose an answer'}
         </Button>
 
         <p className="text-muted-foreground/70 mt-3 text-[11px] leading-relaxed">
@@ -147,6 +176,7 @@ export default function HumanInput({ onRunSim }) {
 
   const resolve = useMutation({
     mutationFn: ({ id, body }) => api.resolveInput(id, body),
+    meta: { toast: 'Answered. The agent resumes from your answer, recorded against your name.' },
     onSuccess: () => refresh(qc, 'decision'),
   })
 

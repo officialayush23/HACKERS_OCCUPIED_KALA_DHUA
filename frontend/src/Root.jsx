@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react'
 import App from './App.jsx'
+import { Toaster } from '@/components/ui/sonner'
 
 /**
  * Which actor is this browser window?
@@ -30,6 +31,17 @@ function Loading({ what }) {
   )
 }
 
+function Shell({ children }) {
+  // Mounted once, above the actor split, so the supplier and warehouse windows
+  // get the same confirmations the operations window does.
+  return (
+    <>
+      {children}
+      <Toaster position="bottom-right" closeButton richColors />
+    </>
+  )
+}
+
 export default function Root() {
   const path = typeof window !== 'undefined' ? window.location.pathname : '/'
 
@@ -37,9 +49,11 @@ export default function Root() {
   if (wh) {
     const id = decodeURIComponent(wh[1] || '') || 'Pune-Plant-1'
     return (
-      <Suspense fallback={<Loading what="the warehouse" />}>
-        <WarehousePortal warehouseId={id} />
-      </Suspense>
+      <Shell>
+        <Suspense fallback={<Loading what="the warehouse" />}>
+          <WarehousePortal warehouseId={id} />
+        </Suspense>
+      </Shell>
     )
   }
 
@@ -47,11 +61,13 @@ export default function Root() {
   if (sup) {
     const id = decodeURIComponent(sup[1] || '').replace(/\/$/, '')
     return (
-      <Suspense fallback={<Loading what={id ? id : 'the supplier list'} />}>
-        {id ? <SupplierPortal supplierId={id.toUpperCase()} /> : <SupplierDirectory />}
-      </Suspense>
+      <Shell>
+        <Suspense fallback={<Loading what={id ? id : 'the supplier list'} />}>
+          {id ? <SupplierPortal supplierId={id.toUpperCase()} /> : <SupplierDirectory />}
+        </Suspense>
+      </Shell>
     )
   }
 
-  return <App />
+  return <Shell><App /></Shell>
 }
