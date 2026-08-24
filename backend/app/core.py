@@ -8,6 +8,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from contextvars import ContextVar
@@ -20,7 +22,11 @@ load_dotenv()
 
 # ---------------------------------------------------------------- config ----
 
-DATABASE_URL = os.environ["DATABASE_URL"]          # port 5432 direct, NOT 6543
+DATABASE_URL = os.environ["DATABASE_URL"]
+# Render runs this against the Supabase transaction pooler (port 6543). That
+# pooler rotates and drops connections without warning, which is why the pool
+# below recycles idle connections early and `db_conn` probes before handing
+# one to a request. statement_cache_size=0 is mandatory on that port.
 APPROVAL_THRESHOLD_INR = int(os.getenv("APPROVAL_THRESHOLD_INR", "150000"))
 EMERGENCY_BUDGET_INR = int(os.getenv("EMERGENCY_BUDGET_INR", "500000"))
 MAX_TOOL_CALLS = int(os.getenv("MAX_TOOL_CALLS_PER_INCIDENT", "12"))
@@ -28,6 +34,20 @@ MAX_TOOL_CALLS = int(os.getenv("MAX_TOOL_CALLS_PER_INCIDENT", "12"))
 SECONDS_PER_SIM_HOUR = float(os.getenv("CLOCK_SECONDS_PER_SIM_HOUR", "1"))
 
 _pool: asyncpg.Pool | None = None
+
+# How long a pooled connection may sit idle before we stop trusting it.
+# Supabase (and the NAT between Render and it) drops idle TCP without telling
+# the client, so asyncpg happily hands out a socket that is already dead and
+# the request dies at `prepare` with ConnectionDoesNotExistError. Two defences,
+# belt and braces: recycle idle connections well before the far end kills them,
+# and probe anything that has been sitting longer than the probe window.
+IDLE_RECYCLE_SECONDS = float(os.getenv("DB_IDLE_RECYCLE_SECONDS", "30"))
+IDLE_PROBE_SECONDS = float(os.getenv("DB_IDLE_PROBE_SECONDS", "5"))
+
+# id(underlying Connection) -> monotonic timestamp of last release. asyncpg's
+# PoolConnectionProxy uses __slots__, so we cannot stamp the object itself.
+# Bounded by pool max_size in practice; pruned if it ever drifts.
+_last_used: dict[int, float] = {}
 
 
 async def db() -> asyncpg.Pool:
@@ -38,8 +58,67 @@ async def db() -> asyncpg.Pool:
             min_size=1,
             max_size=8,
             statement_cache_size=0,   # safe if someone points this at a pooler
+            max_inactive_connection_lifetime=IDLE_RECYCLE_SECONDS,
+            command_timeout=30,
+            server_settings={"application_name": "kaladhua-api"},
         )
     return _pool
+
+
+def _conn_key(conn) -> int:
+    """Identity of the real connection behind a pool proxy."""
+    return id(getattr(conn, "_con", conn))
+
+
+@asynccontextmanager
+async def db_conn():
+    """Acquire a connection that is known to be alive.
+
+    Drop-in replacement for `pool.acquire()`. The difference is that a socket
+    the server already closed is discarded and replaced here, before the
+    handler runs, instead of surfacing as a 500 on the first query. Retrying
+    at acquire time is safe in a way that retrying a whole request is not:
+    nothing has been executed yet, so nothing can be executed twice.
+    """
+    pool = await db()
+    last_error: Exception | None = None
+
+    for _ in range(3):
+        conn = await pool.acquire()
+        key = _conn_key(conn)
+        idle = time.monotonic() - _last_used.get(key, 0.0)
+
+        if idle >= IDLE_PROBE_SECONDS:
+            try:
+                await conn.fetchval("select 1")
+            except asyncio.CancelledError:
+                await pool.release(conn)
+                raise
+            except Exception as exc:                # noqa: BLE001, PERF203
+                # `select 1` cannot fail for query reasons. Anything raised
+                # here means the socket is unusable, and asyncpg reports a
+                # half-open socket in more than one shape: sometimes
+                # ConnectionDoesNotExistError, sometimes InternalClientError
+                # from a protocol left mid-operation. Discard, do not classify.
+                last_error = exc
+                _last_used.pop(key, None)
+                try:
+                    conn.terminate()                # sync, safe on a dead socket
+                finally:
+                    await pool.release(conn)
+                continue
+
+        try:
+            yield conn
+        finally:
+            _last_used[_conn_key(conn)] = time.monotonic()
+            if len(_last_used) > 64:                # paranoia, not bookkeeping
+                _last_used.clear()
+            await pool.release(conn)
+        return
+
+    raise last_error or asyncpg.exceptions.ConnectionDoesNotExistError(
+        "could not obtain a live database connection")
 
 
 async def close_db() -> None:

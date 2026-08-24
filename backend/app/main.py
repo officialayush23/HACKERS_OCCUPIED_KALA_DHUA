@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from .core import (APPROVAL_THRESHOLD_INR, CLOCK, HUB, close_db, db, emit,
+from .core import (APPROVAL_THRESHOLD_INR, CLOCK, HUB, close_db, db, db_conn, emit,
                     set_run_context)
 from . import injector
 from .scenarios import (EVENT_SCHEMA, EVENT_TYPES, REF_TABLES, SCENARIOS,
@@ -92,8 +92,7 @@ class ManualLog(BaseModel):
 
 @app.get("/api/health")
 async def health():
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         n = await conn.fetchval("select count(*) from suppliers")
     return {"ok": True, "suppliers": n, "clock": CLOCK.state(),
             "ws_clients": HUB.count, "running_scenarios": injector.running()}
@@ -135,8 +134,7 @@ async def scenario_context():
     Every list carries the foreign keys the UI needs to make one dropdown narrow
     another — choose a component and only that component's shipments remain.
     """
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         comps = await conn.fetch(
             """select c.id, coalesce(c.display_name, c.name) as name, c.part_number,
                       c.category, c.is_hazmat, c.required_certifications, c.origin,
@@ -228,8 +226,7 @@ async def validate_scenario(body: ValidateBody):
         return {"ok": False, "errors": [str(e)], "events": []}
 
     errors: list[str] = []
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         for where, field, ref_type, value in referenced_ids(clean):
             table, human = REF_TABLES[ref_type]
             exists = await conn.fetchval(
@@ -282,9 +279,8 @@ async def add_custom_scenario(body: CustomScenario):
     # A `world` block is applied before the first event fires, so a tester can
     # construct the situation they want to test rather than only poke the seed.
     if body.world:
-        pool = await db()
         try:
-            async with pool.acquire() as conn:
+            async with db_conn() as conn:
                 async with conn.transaction():
                     built = await worldbuild.apply(conn, body.world)
         except worldbuild.WorldError as e:
@@ -322,9 +318,8 @@ async def custom_event(ev: CustomEvent):
     """Hand-craft a disruption from the dashboard. Same code path as scenarios."""
     if ev.type not in EVENT_TYPES:
         raise HTTPException(400, f"unknown type. one of: {', '.join(EVENT_TYPES)}")
-    pool = await db()
     try:
-        async with pool.acquire() as conn:
+        async with db_conn() as conn:
             return await injector.apply_event(conn, ev.type, ev.params, ev.incident_id)
     except (ValueError, KeyError) as e:
         raise HTTPException(400, str(e))
@@ -333,8 +328,7 @@ async def custom_event(ev: CustomEvent):
 @app.post("/api/logs")
 async def manual_log(entry: ManualLog):
     """Type a note in the dashboard; it becomes a first-class audit event."""
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         return await emit(conn, incident_id=entry.incident_id, actor=entry.actor,
                           event_type="MANUAL_NOTE", human_summary=entry.text,
                           payload={"source": "dashboard"})
@@ -356,8 +350,7 @@ async def reset(mode: str = "demo"):
     if not SEED_PATH.exists():
         raise HTTPException(500, f"seed file not found at {SEED_PATH}")
     sql = SEED_PATH.read_text(encoding="utf-8")
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         await conn.execute(
             "update scenario_runs set status='reset', finished_at=now() "
             "where status='running'")
@@ -397,7 +390,7 @@ async def reset(mode: str = "demo"):
     # a marker in that log there is no way to tell which events describe the world
     # that exists now — which is how the activity feed ends up narrating a run that
     # was wiped, while every other panel correctly reports an empty world.
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         await emit(conn, actor="system", event_type="WORLD_RESET",
                    human_summary=f"World re-seeded ({mode}). Everything above this line "
                                  f"describes a previous run.",
@@ -409,8 +402,7 @@ async def reset(mode: str = "demo"):
 
 @app.get("/api/runs")
 async def runs():
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         rows = await conn.fetch(
             """select r.*, s.total, s.continuity, s.cost, s.risk,
                       s.tool_eff, s.recovery, s.audit,
@@ -424,8 +416,7 @@ async def runs():
 
 @app.post("/api/runs/{run_id}/score")
 async def score(run_id: int):
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         try:
             return await score_run(conn, run_id)
         except ValueError as e:
@@ -444,8 +435,7 @@ async def incidents():
     contract and this did not. An incident is evidence about a run; with no run
     there is no evidence.
     """
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         run_id = await _active_run_id(conn)
         if run_id is None:
             return {"incidents": [], "scope": "no active run"}
@@ -501,8 +491,7 @@ async def _set_active_run(conn, run_id: int | None) -> None:
 @app.get("/api/runs/active")
 async def active_run():
     """What the UI is looking at. The answer is allowed to be nothing."""
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         run_id = await _active_run_id(conn)
         if run_id is None:
             return {"active": None,
@@ -529,8 +518,7 @@ async def active_run():
 @app.get("/api/evaluation/current")
 async def current_evaluation():
     """The active run, judged against explicit criteria. May be nothing."""
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         run_id = await _active_run_id(conn)
         if run_id is None:
             return {"evaluated": False, "run_id": None,
@@ -541,8 +529,7 @@ async def current_evaluation():
 @app.post("/api/evaluation/{run_id}")
 async def evaluate_run(run_id: int):
     """Re-judge a specific run from its own artefacts."""
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         return await evaluation.evaluate(conn, run_id)
 
 
@@ -553,8 +540,7 @@ async def explain_world():
     A tester who cannot see which suppliers are cheap-and-refusable cannot tell
     whether the agent avoided them deliberately or by luck.
     """
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         return await worldbuild.explain(conn)
 
 
@@ -574,8 +560,7 @@ async def hard_reset():
         raise HTTPException(500, f"seed file not found at {SEED_PATH}")
     sql = SEED_PATH.read_text(encoding="utf-8")
 
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         async with conn.transaction():
             # Runtime artefacts, in dependency order. `restart identity` so the
             # next run is run 1 — a fresh world should not start at run 7.
@@ -612,8 +597,7 @@ async def audit(incident_id: str | None = None, run_id: int | None = None,
     read it — but a dashboard showing a reset run's events beside a freshly
     seeded world is worse than showing nothing.
     """
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         # Default scope is the ACTIVE RUN. Showing events from a run that has been
         # reset away, next to a freshly seeded world, is how the activity feed
         # came to narrate work that no longer existed.
@@ -649,8 +633,7 @@ async def audit(incident_id: str | None = None, run_id: int | None = None,
 @app.get("/api/world")
 async def world():
     """Everything the dashboard needs for the operational panes, in one call."""
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         inv = await conn.fetch(
             """select i.*, c.name, c.is_hazmat,
                       round(i.usable_stock::numeric / nullif(i.daily_usage,0), 1) as coverage_days
@@ -690,8 +673,7 @@ async def solve_endpoint(production_order_id: str, record: bool = False,
     anything is scored — this is the what-if. A simulation never records.
     """
     drop = [x.strip().upper() for x in exclude.split(",") if x.strip()]
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         try:
             result = await solve_for_production_order(
                 conn, production_order_id, exclude=drop)
@@ -747,8 +729,7 @@ async def reschedule_production(body: RescheduleBody):
     if body.delay_days < 1 or body.delay_days > 30:
         raise HTTPException(400, "delay_days must be between 1 and 30")
 
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         row = await conn.fetchrow(
             """select po.id, po.deadline, po.original_deadline, po.priority::text as priority,
                       po.allocated_units, po.oem_customer, po.required_component,
@@ -803,8 +784,7 @@ async def reschedule_production(body: RescheduleBody):
 @app.get("/api/kpis")
 async def kpis():
     """Headline numbers for the overview strip."""
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         open_incidents = await conn.fetchval(
             "select count(*) from incidents where status not in ('resolved','failed')")
         critical = await conn.fetchval(
@@ -848,8 +828,7 @@ async def kpis():
 @app.get("/api/network")
 async def network():
     """Supplier -> plant graph for the flow view. Geography, not a map engine."""
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         plant = await conn.fetchrow(
             "select id, name, city, lat, lng from warehouses where id='Pune-Plant-1'")
         sup = await conn.fetch(
@@ -951,8 +930,7 @@ async def agent_state(incident_id: str | None = None):
 @app.get("/api/agent/steps/{incident_id}")
 async def agent_steps(incident_id: str):
     st = agent.state_of(incident_id) or {}
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         rows = await conn.fetch(
             """select sequence, ts, actor, event_type, human_summary, technical_payload,
                       simulated_at_seconds
@@ -974,8 +952,7 @@ async def agent_steps(incident_id: str):
 async def agent_resume(incident_id: str, body: ResumeBody):
     if body.decision not in ("approve", "reject", "modify"):
         raise HTTPException(400, "decision must be approve, reject or modify")
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         await conn.execute(
             """update approvals set status=$2::approval_status, decided_by='operator',
                    decided_at=now()
@@ -989,8 +966,7 @@ async def agent_resume(incident_id: str, body: ResumeBody):
 
 @app.post("/api/agent/verify/{incident_id}")
 async def agent_verify(incident_id: str):
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         return await agent.verify(conn, incident_id)
 
 
@@ -1009,8 +985,7 @@ async def recovery():
     written by the path that did the work — nothing here can report a step as
     done that did not happen, because nothing here writes anything.
     """
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         run_id = await _active_run_id(conn)
         plans = await conn.fetch(
             """select p.id, p.incident_id, p.status::text as status, p.option_kind,
@@ -1140,8 +1115,7 @@ async def recovery():
 @app.post("/api/agent/ask")
 async def agent_ask(body: AskBody):
     """Conversational agent. Reads deterministic state; never mutates it."""
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         # Scoped to the active run, like every other read. Unscoped, this was the
         # last place that could answer "0 open incidents" while the table beside
         # it listed a plan from the run that was open — the assistant
@@ -1318,8 +1292,7 @@ async def agent_command(body: CommandBody):
     """
     if not (body.instruction or "").strip() and not body.choose:
         raise HTTPException(400, "instruction is required")
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         try:
             return await command.run(conn, body.instruction, actor=body.actor,
                                      choose=body.choose, incident_id=body.incident_id)
@@ -1348,8 +1321,7 @@ async def llm_diagnose():
 
 @app.get("/api/threads")
 async def threads(incident_id: str | None = None):
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         return {"threads": await comms.threads_for(conn, incident_id)}
 
 
@@ -1361,8 +1333,7 @@ class HumanMessage(BaseModel):
 
 @app.post("/api/threads/message")
 async def human_message(m: HumanMessage):
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         return await comms.post(conn, thread_id=m.thread_id, direction="outbound",
                                 author_type="human", author_name="Operator",
                                 body=m.body, incident_id=m.incident_id)
@@ -1379,8 +1350,7 @@ class TaskResult(BaseModel):
 
 @app.get("/api/warehouse")
 async def warehouse():
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         # Tasks are things the agent asked for during a run, so they are scoped.
         # Inventory and inbound shipments below are the *world* — they exist
         # whether or not anyone has run a test, and the floor screen should
@@ -1417,8 +1387,7 @@ async def warehouse():
 
 @app.post("/api/warehouse/tasks/{task_id}/complete")
 async def complete_task(task_id: int, result: TaskResult):
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         try:
             out = await comms.warehouse_complete_task(conn, task_id, result.model_dump())
         except ValueError as e:
@@ -1439,8 +1408,7 @@ class ReceiptBody(BaseModel):
 @app.post("/api/warehouse/receive")
 async def receive_shipment(b: ReceiptBody):
     """Received is not usable. This is the quality gate."""
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         po = await conn.fetchrow("select * from purchase_orders where id=$1", b.po_id)
         if not po:
             raise HTTPException(404, "unknown purchase order")
@@ -1492,8 +1460,7 @@ async def receive_shipment(b: ReceiptBody):
 
 @app.get("/api/approvals")
 async def approvals():
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         run_id = await _active_run_id(conn)
         if run_id is None:
             return {"approvals": [], "scope": "no active run"}
@@ -1529,8 +1496,7 @@ async def decide_approval(approval_id: int, body: ApproveBody):
     if body.decision not in ("approve", "reject"):
         raise HTTPException(400, "decision must be 'approve' or 'reject'")
 
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         row = await conn.fetchrow(
             "select * from approvals where id=$1", approval_id)
         if row is None:
@@ -1569,8 +1535,7 @@ async def supplier_reliability(supplier_id: str):
     The number on its own is an opinion. With the events behind it, it is an
     argument the operator can check — and disagree with.
     """
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         row = await conn.fetchrow(
             "select * from supplier_effective where supplier_id=$1", supplier_id)
         if row is None:
@@ -1598,8 +1563,7 @@ async def accuracy():
       interpretation        — supplier replies read into structured facts, versus
         replies it correctly refused to guess at.
     """
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         # Same rule as everywhere else: with no run there is nothing to be right
         # or wrong about. A page reading "0% constraint compliance" against zero
         # orders is not a poor score, it is a claim about a thing that never
@@ -1722,8 +1686,7 @@ async def now_state():
     at the top of the screen has room for a handful of facts, and the ones that
     matter are the ones that need them.
     """
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         # No run means no evidence, and every field below is a claim about
         # something that happened. `production_at_risk` computed off the
         # baseline is the reason this screen once said "SHORT BY 460" in the
@@ -1912,8 +1875,7 @@ async def now_state():
 @app.get("/api/context")
 async def business_context():
     """Who we are, what we build, what is at risk. Names, not IDs."""
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         org = await conn.fetchrow("select * from organizations limit 1")
         prods = await conn.fetch(
             """select p.*, count(b.component_id) as component_count
@@ -1976,16 +1938,14 @@ class SupplierClaim(BaseModel):
 
 @app.get("/api/suppliers")
 async def supplier_directory():
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         return {"suppliers": await supplier_portal.directory(conn),
                 "staffed": supplier_portal.staffed()}
 
 
 @app.get("/api/supplier/{supplier_id}")
 async def supplier_view(supplier_id: str):
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         try:
             return await supplier_portal.overview(conn, supplier_id)
         except ValueError as e:
@@ -2011,8 +1971,7 @@ async def supplier_presence(supplier_id: str, leaving: bool = False):
 
 @app.post("/api/supplier/{supplier_id}/reply")
 async def supplier_reply(supplier_id: str, body: SupplierReply):
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         try:
             return await supplier_portal.reply(
                 conn, supplier_id, thread_id=body.thread_id, kind=body.kind,
@@ -2025,8 +1984,7 @@ async def supplier_reply(supplier_id: str, body: SupplierReply):
 @app.post("/api/supplier/{supplier_id}/claim")
 async def supplier_claim(supplier_id: str, body: SupplierClaim):
     """Let a person tell the lie. Catching a script proves nothing."""
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         try:
             return await supplier_portal.claim_dispatch(
                 conn, supplier_id, po_id=body.po_id, claim=body.claim, note=body.note)
@@ -2049,8 +2007,7 @@ class SendDraftBody(BaseModel):
 
 @app.post("/api/threads/{thread_id}/autonomy")
 async def thread_autonomy(thread_id: int, body: AutonomyBody):
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         try:
             return await comms.set_autonomy(conn, thread_id, body.mode, by=body.by)
         except ValueError as e:
@@ -2059,8 +2016,7 @@ async def thread_autonomy(thread_id: int, body: AutonomyBody):
 
 @app.post("/api/threads/messages/{message_id}/send")
 async def send_draft(message_id: int, body: SendDraftBody):
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         try:
             return await comms.send_draft(conn, message_id, edited_body=body.body,
                                           sent_by=body.sent_by)
@@ -2086,8 +2042,7 @@ async def human_input():
     because the evidence would not carry it — which is the more interesting
     behaviour and, until now, the one nothing on screen rendered.
     """
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         # Same rule as everywhere else. A question the agent asked during a run
         # that no longer exists is not a question anyone can usefully answer.
         if await _active_run_id(conn) is None:
@@ -2098,8 +2053,7 @@ async def human_input():
 
 @app.post("/api/human-input/{request_id}/resolve")
 async def resolve_human_input(request_id: int, body: ResolveInput):
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         try:
             return await supplier_portal.resolve_human_input(
                 conn, request_id, choice=body.choice, note=body.note,
@@ -2120,8 +2074,7 @@ async def decision_intelligence(incident_id: str | None = None,
     wants. This is the brief, which is what the person who has to sign wants.
     Same rows underneath; different question.
     """
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         return await intelligence.brief(conn, incident_id=incident_id,
                                         production_order_id=production_order_id)
 
@@ -2163,8 +2116,7 @@ async def create_test_supplier(body: NewSupplier):
     if mode not in ("AIR", "SEA", "RAIL", "ROAD"):
         raise HTTPException(400, "mode must be AIR, SEA, RAIL or ROAD")
 
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         if not await conn.fetchval("select 1 from components where id=$1", body.component_id):
             raise HTTPException(404, f"unknown component {body.component_id}")
         n = await conn.fetchval("select count(*) from suppliers where origin='test'")
@@ -2221,8 +2173,7 @@ async def create_test_supplier(body: NewSupplier):
 
 @app.delete("/api/world/suppliers/{supplier_id}")
 async def delete_test_supplier(supplier_id: str):
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         origin = await conn.fetchval("select origin from suppliers where id=$1", supplier_id)
         if origin is None:
             raise HTTPException(404, f"unknown supplier {supplier_id}")

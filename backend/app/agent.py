@@ -24,7 +24,7 @@ import json
 from typing import Any
 
 from . import comms, learning, llm
-from .core import (APPROVAL_THRESHOLD_INR, CLOCK, broadcast_state, db, emit,
+from .core import (APPROVAL_THRESHOLD_INR, CLOCK, broadcast_state, db, db_conn, emit,
                    next_incident_id, run_context)
 
 logger = logging.getLogger("disruptionops.agent")
@@ -189,9 +189,8 @@ async def _run(incident_id: str) -> None:
 
     An agent that stops must say so, in the same log as everything else.
     """
-    pool = await db()
     try:
-        async with pool.acquire() as conn:
+        async with db_conn() as conn:
             await emit(conn, incident_id=incident_id, actor="agent",
                        event_type="AGENT_RUN_STARTED",
                        human_summary="Agent picked up the incident.",
@@ -212,7 +211,7 @@ async def _run(incident_id: str) -> None:
         trace = traceback.format_exc()
         logger.exception("agent run failed for %s", incident_id)
         pool2 = await db()
-        async with pool2.acquire() as conn:
+        async with db_conn() as conn:
             await _step(conn, incident_id, f"Agent stopped: {exc}", status="error")
             # A distinct event type, so the UI can say "this run failed" rather
             # than leaving a spinner up. The traceback goes in the technical
@@ -249,10 +248,9 @@ async def _investigate(conn, incident_id: str) -> None:
 
     # TRUE parallelism: one pooled connection each. asyncpg forbids concurrent
     # operations on a single connection, so gather() over `conn` would deadlock.
-    pool = await db()
 
     async def q(sql: str, one: bool = False):
-        async with pool.acquire() as c:
+        async with db_conn() as c:
             return await (c.fetchrow(sql, cid) if one else c.fetch(sql, cid))
 
     inv, prod, pos, sup = await asyncio.gather(
@@ -361,11 +359,10 @@ async def _communicate(conn, incident_id: str) -> None:
              join supplier_effective se on se.supplier_id=sc.supplier_id
             where sc.component_id=$1 order by se.effective_reliability desc limit 3""", cid)
     if alts:
-        pool = await db()
 
         async def rfq(supplier_id: str):
             # Own connection per RFQ — this is genuinely concurrent, not a loop.
-            async with pool.acquire() as c:
+            async with db_conn() as c:
                 return await comms.agent_message_supplier(
                     c, incident_id=incident_id, supplier_id=supplier_id, kind="rfq",
                     context={"component_name": name,

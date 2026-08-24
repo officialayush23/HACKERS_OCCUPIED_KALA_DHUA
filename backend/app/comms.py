@@ -14,7 +14,7 @@ import json
 from typing import Any
 
 from . import llm, parsing
-from .core import CLOCK, broadcast_state, db, emit, run_context
+from .core import CLOCK, broadcast_state, db, db_conn, emit, run_context
 
 #: How a simulated counterparty behaves. Never revealed to the agent.
 PERSONAS: dict[str, dict[str, Any]] = {
@@ -252,8 +252,7 @@ async def _supplier_reply(thread_id: int, supplier_id: str, name: str,
 
     if supplier_portal.present(supplier_id):
         try:
-            pool = await db()
-            async with pool.acquire() as conn:
+            async with db_conn() as conn:
                 await conn.execute(
                     "update message_threads set status='awaiting_reply' where id=$1",
                     thread_id)
@@ -273,8 +272,7 @@ async def _supplier_reply(thread_id: int, supplier_id: str, name: str,
         return
 
     try:
-        pool = await db()
-        async with pool.acquire() as conn:
+        async with db_conn() as conn:
             await post(conn, thread_id=thread_id, direction="inbound",
                        author_type="supplier", author_name=name,
                        body=persona["script"], incident_id=incident_id,

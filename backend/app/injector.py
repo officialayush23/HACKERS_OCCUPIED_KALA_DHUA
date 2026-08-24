@@ -12,7 +12,7 @@ from datetime import timedelta
 from typing import Any
 
 from . import comms, learning
-from .core import (CLOCK, broadcast_state, db, emit, next_incident_id,
+from .core import (CLOCK, broadcast_state, db, db_conn, emit, next_incident_id,
                     run_context, set_run_context)
 from .scenarios import SCENARIOS
 
@@ -369,7 +369,6 @@ async def apply_event(conn, etype: str, params: dict[str, Any],
 
 async def _run(scenario_id: str, run_id: int) -> None:
     sc = SCENARIOS[scenario_id]
-    pool = await db()
     set_run_context(run_id, CLOCK.now())      # every nested emit inherits this
     start = CLOCK.elapsed_sim_hours()
     try:
@@ -377,9 +376,9 @@ async def _run(scenario_id: str, run_id: int) -> None:
             target = start + float(ev.get("at_h", 0))
             while CLOCK.elapsed_sim_hours() < target:
                 await asyncio.sleep(0.2)
-            async with pool.acquire() as conn:
+            async with db_conn() as conn:
                 await apply_event(conn, ev["type"], ev.get("params", {}))
-        async with pool.acquire() as conn:
+        async with db_conn() as conn:
             await conn.execute(
                 "update scenario_runs set finished_at=now(), status='completed' "
                 "where id=$1", run_id)
@@ -400,14 +399,14 @@ async def _run(scenario_id: str, run_id: int) -> None:
         await broadcast_state("scenario_finished", {"scenario_id": scenario_id,
                                                     "run_id": run_id})
     except asyncio.CancelledError:
-        async with pool.acquire() as conn:
+        async with db_conn() as conn:
             await conn.execute(
                 "update scenario_runs set finished_at=now(), status='cancelled' "
                 "where id=$1", run_id)
         await broadcast_state("scenario_cancelled", {"scenario_id": scenario_id})
         raise
     except Exception as exc:
-        async with pool.acquire() as conn:
+        async with db_conn() as conn:
             await conn.execute(
                 "update scenario_runs set finished_at=now(), status='failed', "
                 "failure_reason=$2 where id=$1", run_id, str(exc)[:500])
@@ -427,8 +426,7 @@ async def inject(scenario_id: str) -> dict[str, Any]:
         raise ValueError(f"unknown scenario '{scenario_id}'")
     if scenario_id in _running:
         raise ValueError(f"'{scenario_id}' is already running")
-    pool = await db()
-    async with pool.acquire() as conn:
+    async with db_conn() as conn:
         run_id = await conn.fetchval(
             "insert into scenario_runs (scenario_id) values ($1) returning id", scenario_id)
         # Context BEFORE the first emit, or event #1 is orphaned from its own run.
